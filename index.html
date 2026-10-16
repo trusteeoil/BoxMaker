@@ -1,0 +1,2070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box Maker</title>
+<!--
+  Box Maker: makes rounded-corner boxes (with lids, dividers, labels, drain holes,
+  magnets) for 3D printing and exports STL.
+  Fully self-contained: no libraries, no internet needed. The 3D viewer is
+  plain WebGL written below, so this file keeps working forever offline.
+-->
+<style>
+  /* ===== Theme: light only, readable ===== */
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --text: #1f2933; --muted: #6b7785;
+    --line: #dde3ea; --accent: #00a63e; --accent-soft: #e6f6ec;
+    --warn-bg: #fff7e0; --warn: #8a6100; --err-bg: #fdecea; --err: #b3261e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #panel { width: 350px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; padding: 16px 16px 10px; }
+  #viewWrap { flex: 1; position: relative; min-width: 0; }
+  #view { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #view:active { cursor: grabbing; }
+
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+  .sublabel { font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+
+  /* Collapsible sections so the long control list stays manageable */
+  details.sec { border-top: 1px solid var(--line); }
+  details.sec > summary { list-style: none; cursor: pointer; padding: 12px 0 10px; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary::after { content: "+"; font-size: 16px; color: var(--muted); }
+  details.sec[open] > summary::after { content: "−"; }
+  details.sec > summary .badge { margin-left: auto; margin-right: 10px; font-size: 11px; text-transform: none;
+    letter-spacing: 0; background: var(--accent-soft); color: #006b28; border-radius: 999px; padding: 1px 8px; }
+  details.sec > .body { padding-bottom: 12px; }
+
+  /* Segmented toggle buttons (pick one) */
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; background: #fff; padding: 8px 6px; font: inherit; font-size: 13px;
+    cursor: pointer; color: var(--text); border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.active { background: var(--accent-soft); color: #006b28; font-weight: 600; }
+
+  /* Chip buttons (pick any number) */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 11px;
+    font: inherit; font-size: 13px; cursor: pointer; color: var(--text); }
+  .chips button.active { background: var(--accent-soft); border-color: #9fd8b3; color: #006b28; font-weight: 600; }
+
+  /* Small action buttons */
+  .btnRow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .mini { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 9px;
+    font: inherit; font-size: 12px; cursor: pointer; color: var(--text); }
+  .mini:hover { background: var(--accent-soft); }
+  .mini:disabled { opacity: .45; cursor: default; background: #fff; }
+
+  /* Slider + number box rows */
+  .field { margin: 10px 0; }
+  .field .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .field label { font-weight: 500; }
+  .field .num { display: flex; align-items: center; gap: 4px; }
+  .field input[type=number], .smallNum { width: 74px; padding: 4px 6px; border: 1px solid var(--line);
+    border-radius: 6px; font: inherit; text-align: right; background: #fff; color: var(--text); }
+  .smallNum { width: 52px; }
+  .field em { font-style: normal; color: var(--muted); font-size: 12px; width: 22px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 6px 0 0; }
+  input.text { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; background: #fff; color: var(--text); margin-top: 4px; }
+  .gridRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
+
+  .check { display: flex; align-items: center; gap: 8px; margin: 8px 0; cursor: pointer; font-weight: 500; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .colorRow { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; }
+  .colorRow input { width: 44px; height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0; background: #fff; }
+  .sub { padding-left: 4px; }
+
+  /* Divider "paint" editor */
+  #divCanvas { width: 100%; display: block; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+    touch-action: none; cursor: crosshair; margin-top: 6px; }
+
+  #info { background: #f7f9fb; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  #info div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  #info div.sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
+  #info span:first-child { color: var(--muted); }
+  #info span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .msg { border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px; }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.err { background: var(--err-bg); color: var(--err); }
+
+  .exportBtn { width: 100%; margin-top: 10px; padding: 12px; font: inherit; font-weight: 600; font-size: 15px;
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px; cursor: pointer; }
+  .exportBtn.secondary { background: #fff; color: #006b28; border: 1.5px solid var(--accent); padding: 10px; font-size: 14px; }
+  .exportBtn:disabled { background: #b7c2cc; color: #fff; border-color: #b7c2cc; cursor: not-allowed; }
+  .fileName { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; text-align: center; }
+  #version { font-size: 11px; color: #a3adb8; text-align: center; margin-top: 18px; }
+
+  /* Viewer overlay: view buttons + mouse hint */
+  #views { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  #views button { background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer; color: var(--text); }
+  #views button:hover { background: var(--accent-soft); }
+  #mouseHint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted);
+    background: rgba(255,255,255,.85); padding: 3px 8px; border-radius: 6px; pointer-events: none; }
+
+  /* Phones/narrow screens: viewer on top, controls below */
+  @media (max-width: 760px) {
+    #app { flex-direction: column; }
+    #viewWrap { order: 1; height: 50%; flex: none; }
+    #panel { order: 2; width: auto; flex: 1; border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>Box Maker</h1>
+
+    <!-- ===== Size ===== -->
+    <details class="sec" open><summary>Size</summary><div class="body">
+      <div class="seg" id="modeSeg"></div>
+      <p class="hint" id="modeHint"></p>
+      <div id="sizeFields"></div>
+    </div></details>
+
+    <!-- ===== Walls & edges ===== -->
+    <details class="sec"><summary>Walls &amp; edges <span class="badge" id="bdgWalls"></span></summary><div class="body">
+      <div id="wallFields"></div>
+      <label class="check"><input type="checkbox" id="vaseChk"> Vase mode (solid shape)</label>
+      <p class="hint" id="vaseHint">Makes a solid block. Turn on spiral vase in your slicer and it prints one wall. Dividers, lid, drain holes and floor label turn off.</p>
+      <div class="sublabel">Round or bevel edges</div>
+      <div class="chips" id="edgeChips"></div>
+      <div id="edgeBox">
+        <div class="seg" id="edgeStyleSeg" style="margin-top:8px"></div>
+        <div id="edgeFields"></div>
+      </div>
+    </div></details>
+
+    <!-- ===== Stacking ===== -->
+    <details class="sec"><summary>Stacking <span class="badge" id="bdgStack"></span></summary><div class="body">
+      <div class="seg" id="stackSeg"></div>
+      <p class="hint" id="stackHint"></p>
+      <div id="nestFields"></div>
+      <div id="lipFields"></div>
+    </div></details>
+
+    <!-- ===== Dividers ===== -->
+    <details class="sec"><summary>Dividers <span class="badge" id="bdgDiv"></span></summary><div class="body">
+      <label class="check"><input type="checkbox" id="divChk"> Add dividers</label>
+      <div id="divBox" class="sub">
+        <div class="gridRow">Columns <input type="number" class="smallNum" id="divColsIn" min="1" max="30" value="2">
+          Rows <input type="number" class="smallNum" id="divRowsIn" min="1" max="30" value="2">
+          <button class="mini" id="divGridBtn">Make even grid</button></div>
+        <canvas id="divCanvas"></canvas>
+        <p class="hint">Top view, front of the box at the bottom. Drag a line to move it. Click a piece of a line to turn it off or back on.</p>
+        <div class="btnRow">
+          <button class="mini" id="addColBtn">+ Column</button>
+          <button class="mini" id="addRowBtn">+ Row</button>
+          <button class="mini" id="evenBtn">Even out</button>
+          <button class="mini" id="delBtn">Delete selected</button>
+          <button class="mini" id="clearDivBtn">Clear all</button>
+        </div>
+        <div id="selBox"></div>
+        <div id="compInfo" class="hint"></div>
+        <div id="divFields"></div>
+      </div>
+    </div></details>
+
+    <!-- ===== Drain holes ===== -->
+    <details class="sec"><summary>Drain holes <span class="badge" id="bdgDrain"></span></summary><div class="body">
+      <label class="check"><input type="checkbox" id="drainChk"> Add drain holes</label>
+      <div id="drainBox" class="sub">
+        <div class="seg" id="drainModeSeg"></div>
+        <div id="drainFields"></div>
+        <p class="hint">Grid holes spread evenly across the floor and stay clear of the rounded corners.</p>
+      </div>
+    </div></details>
+
+    <!-- ===== Size label ===== -->
+    <details class="sec"><summary>Size label <span class="badge" id="bdgLabel"></span></summary><div class="body">
+      <label class="check"><input type="checkbox" id="embossChk" checked> Add size label</label>
+      <div id="embossBox" class="sub">
+        <div class="chips" id="faceChips"></div>
+        <p class="hint">Bottom is cut in so the box still sits flat (reads right when you flip it over). Floor and walls are raised.</p>
+        <div class="field">
+          <label>Text</label>
+          <input type="text" class="text" id="labelText" maxlength="40">
+          <p class="hint">Leave blank to use the size automatically.</p>
+        </div>
+        <div id="embossFields"></div>
+      </div>
+    </div></details>
+
+    <!-- ===== Lid ===== -->
+    <details class="sec"><summary>Lid <span class="badge" id="bdgLid"></span></summary><div class="body">
+      <label class="check"><input type="checkbox" id="lidChk"> Add lid</label>
+      <div id="lidBox" class="sub">
+        <div class="sublabel">How it holds</div>
+        <div class="seg" id="lidFitSeg"></div>
+        <div id="lidStyleWrap">
+          <div class="sublabel">Style</div>
+          <div class="seg" id="lidStyleSeg"></div>
+        </div>
+        <p class="hint" id="lidHint"></p>
+        <div id="lidFields"></div>
+
+        <div id="snapBox">
+          <div class="sublabel">Snap bumps</div>
+          <div class="seg" id="snapStyleSeg"></div>
+          <p class="hint" id="snapHint"></p>
+          <div id="snapFields"></div>
+        </div>
+
+        <div id="magBox">
+          <div class="sublabel">Magnets</div>
+          <div id="magFields"></div>
+          <p class="hint">Holes go in posts in the 4 inside corners of the box and in the lid. Print the test piece first to dial in the fit.</p>
+          <button class="exportBtn secondary" id="exportMagBtn">Export magnet test STL</button>
+          <div class="fileName" id="magFileName"></div>
+        </div>
+
+        <div class="sublabel">Getting it open</div>
+        <label class="check"><input type="checkbox" id="tabChk"> Pull tab on the lid</label>
+        <div id="tabFields" class="sub"></div>
+        <label class="check"><input type="checkbox" id="notchChk"> Finger notch in the box rim (front)</label>
+        <div id="notchFields" class="sub"></div>
+
+        <div class="sublabel">Show lid</div>
+        <div class="seg" id="lidViewSeg"></div>
+      </div>
+    </div></details>
+
+    <!-- ===== View ===== -->
+    <details class="sec"><summary>View</summary><div class="body">
+      <label class="check"><input type="checkbox" id="previewChk"> Preview stack</label>
+      <label class="check"><input type="checkbox" id="cutChk"> Cut in half (see the walls)</label>
+      <div class="colorRow"><span>Preview color</span><input type="color" id="colorPick" value="#2fb36b"></div>
+    </div></details>
+
+    <!-- ===== Result + export (always open) ===== -->
+    <details class="sec" open><summary>Result</summary><div class="body">
+      <div id="info"></div>
+      <div id="msgs"></div>
+      <button class="exportBtn" id="exportBtn">Export box STL</button>
+      <div class="fileName" id="fileName"></div>
+      <div id="lidExportWrap">
+        <button class="exportBtn secondary" id="exportLidBtn">Export lid STL</button>
+        <div class="fileName" id="lidFileName"></div>
+      </div>
+    </div></details>
+
+    <!-- Version lives here, small and out of the way -->
+    <div id="version">v2026.10.15.03</div>
+  </div>
+
+  <div id="viewWrap">
+    <canvas id="view"></canvas>
+    <div id="views">
+      <button data-view="iso" title="Key 0">Iso</button>
+      <button data-view="top" title="Key 1">Top</button>
+      <button data-view="bottom" title="Key 2">Bottom</button>
+      <button data-view="front" title="Key 3">Front</button>
+      <button data-view="right" title="Key 6">Side</button>
+      <button data-view="fit" title="Key Z">Fit</button>
+    </div>
+    <div id="mouseHint">Left-drag rotate · Right-drag pan · Scroll zoom</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   SETTINGS STATE
+   Everything the user can change lives in this one object. All
+   measurements are millimeters, which is what Bambu Studio expects.
+   ===================================================================== */
+const state = {
+  mode: 'inner',     // 'inner' = numbers describe the inside space, 'outer' = outside footprint
+  w: 50, d: 50, h: 50,
+  radius: 5,         // corner radius, applied to whichever side 'mode' is measuring
+  wall: 2,           // side wall thickness
+  floor: 2,          // bottom thickness
+  vase: false,       // solid shape for spiral vase printing
+
+  // Edge rounding/bevel
+  edges: { bottom: false, topOuter: false, topInner: false, scoop: false },
+  edgeStyle: 'fillet',   // 'fillet' (round) | 'chamfer' (45 degree bevel)
+  edgeSize: 1,
+
+  stack: 'none',     // 'none' | 'nest' (cups) | 'lip' (bricks)
+  taper: 4,          // nest: how much narrower the bottom is, per side
+  foot: 5,           // lip: height of the stepped-in foot that drops into the box below
+  clear: 0.3,        // lip: gap per side so the foot slides in without forcing
+
+  // Dividers. Positions are mm measured from the inside left wall (columns)
+  // and inside front wall (rows), at the top of the box.
+  divOn: false,
+  divXs: [], divYs: [],
+  divOff: new Set(),     // line pieces the user clicked off, like "c0:1"
+  divThick: 1.2,
+  divDrop: 0,            // how far below the rim dividers stop (extra, on top of automatic clearance)
+
+  // Drain holes
+  drain: false,
+  drainMode: 'one',      // 'one' (center) | 'grid'
+  drainD: 5,
+  drainCols: 3, drainRows: 3,
+
+  // Size label (on by default)
+  emboss: true,
+  faces: { bottom: true, floor: false, front: false, back: false, left: false, right: false },
+  labelText: '',     // blank = automatic size text
+  textH: 6,          // letter height (shrinks automatically if it doesn't fit)
+  textDepth: 0.6,    // how far letters stick out (or cut in on the bottom)
+
+  // Lid
+  lid: false,
+  lidFit: 'friction',  // 'friction' | 'snap' | 'magnet'
+  lidStyle: 'flat',    // 'flat' | 'stack'
+  lidThick: 2,         // lid plate / tray floor thickness
+  plugDepth: 5,        // how far the plug goes down into the box
+  plugWall: 1.6,       // flat lid: plug wall thickness (thinner = more flex)
+  lidClear: 0.15,      // gap per side between plug and box wall
+  snapBump: 0.5,       // snap: how far the bump sticks out from the plug
+  snapStyle: 'sides',  // 'sides' (a bump in the middle of each side) | 'ring' (all the way around)
+  bumpLen: 12,         // snap: length of each side bump
+  rimDepth: 3,         // stackable lid: how deep the tray is that the next box sits in
+  magD: 6, magT: 3,    // magnet size
+  magFit: 0.15,        // extra hole diameter over the magnet (press fit)
+  lidTab: false, tabW: 20, tabL: 8,
+  notch: false, notchW: 20, notchD: 6,
+  lidView: 'beside',   // 'beside' (print position) | 'on' (assembled)
+
+  preview: false,
+  cut: false,
+  color: '#2fb36b'
+};
+
+/* =====================================================================
+   GEOMETRY
+   The box is built as a stack of "rings". Each ring is a rounded
+   rectangle at some height. We walk up the outside, across the rim,
+   down the inside, and cap the bottom and the inner floor. Connecting
+   neighboring rings with triangles gives a closed, watertight solid,
+   which slicers need. Lids and corner posts are built the same way.
+
+   Every ring has the same number of points in the same order, which is
+   what makes stitching rings together simple and gap-free.
+
+   Profiles: "inset" means how far a ring is pulled in from the full
+   outside size (0 = full size, negative = smaller). The outside surface
+   is O(z), the inside surface is I(z). Stacking shapes, edge rounding,
+   the snap groove and the scoop are all just changes to O(z) and I(z).
+
+   Extras (labels, dividers, drain-hole floor, magnet posts) are separate
+   closed shells that overlap the body a little. The STL holds them all
+   and the slicer merges them into one part.
+   ===================================================================== */
+// GEOMETRY START
+const SEG = 16;      // points per rounded corner (more = smoother curves, bigger file)
+const EDGE_N = 24;   // extra points along each straight side (lets the notch and snap bumps follow a shape)
+const R_MIN = 0.05;  // tiny minimum radius so corners never collapse to zero-size triangles
+const EPS = 0.005;   // pieces overlap each other a hair so the slicer merges them cleanly
+
+// One rounded-rectangle ring, counter-clockwise when viewed from above.
+// push(side, s) can bulge the straight sides outward (used for snap bumps).
+// Sides: 0 = back (+Y), 1 = left (-X), 2 = front (-Y), 3 = right (+X). s = position along the side.
+function roundedRing(hw, hd, r, z, push) {
+  // Keep the radius smaller than the half-size so straight edges never vanish
+  r = Math.max(R_MIN, Math.min(r, hw - 0.01, hd - 0.01));
+  const cx = hw - r, cy = hd - r;
+  const corners = [[cx, cy, 0], [-cx, cy, 90], [-cx, -cy, 180], [cx, -cy, 270]];
+  const normals = [[0, 1], [-1, 0], [0, -1], [1, 0]];
+  const pts = [];
+  for (let k = 0; k < 4; k++) {
+    const [x0, y0, a0] = corners[k];
+    for (let i = 0; i <= SEG; i++) {
+      const a = (a0 + 90 * i / SEG) * Math.PI / 180;
+      pts.push([x0 + r * Math.cos(a), y0 + r * Math.sin(a), z]);
+    }
+    // straight side from the end of this corner to the start of the next
+    const A = pts[pts.length - 1];
+    const [nx0, ny0, na0] = corners[(k + 1) % 4];
+    const B = [nx0 + r * Math.cos(na0 * Math.PI / 180), ny0 + r * Math.sin(na0 * Math.PI / 180)];
+    const n = normals[k];
+    for (let j = 1; j <= EDGE_N; j++) {
+      const t = j / (EDGE_N + 1);
+      let x = A[0] + (B[0] - A[0]) * t, y = A[1] + (B[1] - A[1]) * t;
+      if (push) { const d = push(k, k % 2 === 0 ? x : y); x += n[0] * d; y += n[1] * d; }
+      pts.push([x, y, z]);
+    }
+  }
+  return pts;
+}
+
+// Stitch a list of rings (and {c:[x,y,z]} center points for caps) into triangles.
+// Order: bottom center, outside rings going up, inside rings going down, inner center.
+// (A list can also loop back to its first ring to make a ring-shaped solid with a hole.)
+// Triangles wind counter-clockwise seen from outside, so normals point outward.
+function stitch(list) {
+  const tris = [];
+  for (let k = 0; k < list.length - 1; k++) {
+    const A = list[k], B = list[k + 1];
+    if (A.c) {                       // fan from a center point out to a ring
+      const n = B.length;
+      for (let i = 0; i < n; i++) tris.push([A.c, B[(i + 1) % n], B[i]]);
+    } else if (B.c) {                // fan from a ring in to a center point
+      const n = A.length;
+      for (let i = 0; i < n; i++) tris.push([A[i], A[(i + 1) % n], B.c]);
+    } else {                         // band of two triangles per segment between rings
+      const n = A.length;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        tris.push([A[i], A[j], B[j]]);
+        tris.push([A[i], B[j], B[i]]);
+      }
+    }
+  }
+  return tris;
+}
+
+// --- small solid helpers ---
+function quad(tris, a, b, c, d) { tris.push([a, b, c]); tris.push([a, c, d]); }
+
+// Six-sided block from 8 corners p(i,j,k) with i~x, j~y, k~z. Works for slanted blocks too.
+function cuboid(tris, p) {
+  const P = [];
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) P[i * 4 + j * 2 + k] = p(i, j, k);
+  const v = (i, j, k) => P[i * 4 + j * 2 + k];
+  quad(tris, v(0,0,0), v(0,0,1), v(0,1,1), v(0,1,0));
+  quad(tris, v(1,0,0), v(1,1,0), v(1,1,1), v(1,0,1));
+  quad(tris, v(0,0,0), v(1,0,0), v(1,0,1), v(0,0,1));
+  quad(tris, v(0,1,0), v(0,1,1), v(1,1,1), v(1,1,0));
+  quad(tris, v(0,0,0), v(0,1,0), v(1,1,0), v(1,0,0));
+  quad(tris, v(0,0,1), v(1,0,1), v(1,1,1), v(0,1,1));
+}
+function boxTris(tris, x0, x1, y0, y1, z0, z1) {
+  cuboid(tris, (i, j, k) => [i ? x1 : x0, j ? y1 : y0, k ? z1 : z0]);
+}
+
+// Flat-topped solid from a convex outline (counter-clockwise [x,y] points)
+function convexPrism(tris, poly, z0, z1) {
+  const n = poly.length;
+  const B = poly.map(([x, y]) => [x, y, z0]), T = poly.map(([x, y]) => [x, y, z1]);
+  for (let i = 1; i < n - 1; i++) { tris.push([B[0], B[i + 1], B[i]]); tris.push([T[0], T[i], T[i + 1]]); }
+  for (let i = 0; i < n; i++) { const j = (i + 1) % n; quad(tris, B[i], B[j], T[j], T[i]); }
+  return tris;
+}
+
+// Cut a convex outline along a straight line (keeps one side). axis 0 = x, 1 = y.
+function clipPoly(poly, axis, val, keepGreater) {
+  const inside = q => keepGreater ? q[axis] >= val : q[axis] <= val;
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const A = poly[i], B = poly[(i + 1) % poly.length];
+    const ia = inside(A), ib = inside(B);
+    const cut = () => { const t = (val - A[axis]) / (B[axis] - A[axis]); return [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t]; };
+    if (ia && ib) out.push(B);
+    else if (ia && !ib) out.push(cut());
+    else if (!ia && ib) { out.push(cut()); out.push(B); }
+  }
+  // drop doubled-up points so no zero-size triangles get made
+  return out.filter((q, i) => { const n = out[(i + 1) % out.length]; return Math.hypot(q[0] - n[0], q[1] - n[1]) > 1e-6; });
+}
+
+function insideRR(x, y, hw, hd, r) {
+  r = Math.max(R_MIN, Math.min(r, hw, hd));
+  if (x > hw || y > hd) return false;
+  const dx = Math.max(x - (hw - r), 0), dy = Math.max(y - (hd - r), 0);
+  return dx * dx + dy * dy <= r * r;
+}
+
+// Where a ray from point c at angle a leaves a convex outline
+function rayConvex(poly, c, a) {
+  const dx = Math.cos(a), dy = Math.sin(a);
+  let best = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const P = poly[i], Q = poly[(i + 1) % poly.length];
+    const ex = Q[0] - P[0], ey = Q[1] - P[1];
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const wx = P[0] - c[0], wy = P[1] - c[1];
+    const t = (wx * ey - wy * ex) / den, u = (wx * dy - wy * dx) / den;
+    if (t > 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) best = Math.min(best, t);
+  }
+  return [c[0] + dx * best, c[1] + dy * best];
+}
+
+// A convex block with one round hole in it. Used for drain-hole tiles, lid magnet
+// pockets and the magnet test piece. The outline and the hole are sampled at the
+// same angles so they stitch together like two rings.
+//   'through': hole goes all the way through
+//   'pocket' : hole from the top down to zp, closed floor
+//   'stepped': hole from the top down to zp, then a smaller hole (radius rs) through the bottom
+function holedCell(poly, c, rh, z0, z1, mode, zp, rs) {
+  const TAU = Math.PI * 2;
+  let A = [];
+  for (let i = 0; i < 48; i++) A.push(TAU * i / 48);
+  for (const v of poly) { let a = Math.atan2(v[1] - c[1], v[0] - c[0]); if (a < 0) a += TAU; if (a > TAU - 1e-4) a = 0; A.push(a); }
+  A = uniq(A);
+  const O = z => A.map(a => { const p = rayConvex(poly, c, a); return [p[0], p[1], z]; });
+  const H = (r, z) => A.map(a => [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a), z]);
+  if (mode === 'through') { const o0 = O(z0); return stitch([o0, O(z1), H(rh, z1), H(rh, z0), o0]); }
+  if (mode === 'pocket') return stitch([{ c: [c[0], c[1], z0] }, O(z0), O(z1), H(rh, z1), H(rh, zp), { c: [c[0], c[1], zp] }]);
+  const o0 = O(z0);
+  return stitch([o0, O(z1), H(rh, z1), H(rh, zp), H(rs, zp), H(rs, z0), o0]);
+}
+
+// Turn a black/white letter picture into as few rectangles as possible.
+// want = 1 gives the letters, want = 0 gives the space around them.
+// Rectangles come back in mm, centered on the picture: [u0, v0, u1, v1] with v pointing up.
+function bitmapRects(ras, want) {
+  const { W, H, bits, px } = ras;
+  const rects = [];
+  let active = new Map();
+  for (let y = 0; y < H; y++) {
+    const next = new Map();
+    let x = 0;
+    while (x < W) {
+      if (bits[y * W + x] !== want) { x++; continue; }
+      let x1 = x;
+      while (x1 < W && bits[y * W + x1] === want) x1++;
+      const key = x + ',' + x1, r = active.get(key);
+      if (r) { r.y1 = y + 1; next.set(key, r); active.delete(key); }   // same run as the row above: grow it
+      else next.set(key, { x0: x, x1, y0: y, y1: y + 1 });
+      x = x1;
+    }
+    for (const r of active.values()) rects.push(r);
+    active = next;
+  }
+  for (const r of active.values()) rects.push(r);
+  return rects.map(r => [(r.x0 - W / 2) * px, (H / 2 - r.y1) * px, (r.x1 - W / 2) * px, (H / 2 - r.y0) * px]);
+}
+
+function uniq(arr) {
+  const s = [...arr].sort((a, b) => a - b), out = [];
+  for (const v of s) if (!out.length || Math.abs(v - out[out.length - 1]) > 1e-4) out.push(v);
+  return out;
+}
+
+// Inset of a profile at any height (straight lines between profile points)
+function insetAt(outer, z) {
+  for (let i = 0; i < outer.length - 1; i++) {
+    const [z0, o0] = outer[i], [z1, o1] = outer[i + 1];
+    if (z >= z0 && z <= z1) return z1 === z0 ? o1 : o0 + (o1 - o0) * (z - z0) / (z1 - z0);
+  }
+  return z < outer[0][0] ? outer[0][1] : outer[outer.length - 1][1];
+}
+
+// Edge rounding. zr = distance from the edge (0 at the edge). Returns how far the
+// surface is pulled in at that distance (negative), reaching 0 at the edge size.
+function edgeOff(E, zr) {
+  if (!E || zr < 0 || zr >= E.s) return 0;
+  if (E.style === 'chamfer') return -(E.s - zr);
+  const d = E.s - zr;
+  return -(E.s - Math.sqrt(Math.max(0, E.s * E.s - d * d)));
+}
+function edgeSamples(E) {
+  if (E.style === 'chamfer') return [0, E.s];
+  const out = [];
+  for (let k = 0; k <= 6; k++) out.push(E.s - E.s * Math.cos(k / 6 * Math.PI / 2));
+  return out;
+}
+
+// Turn the user's settings into the numbers the mesh builders need,
+// plus any errors (can't build) and warnings (can build, but heads up).
+function computeGeometry(p) {
+  const errs = [], warns = [];
+  const t = p.wall, f = p.floor, vase = !!p.vase;
+  let hw, hd, rO, Ho;
+
+  // Inner mode: user numbers are the inside, so add the walls/floor around them.
+  // Outer mode: user numbers are the outside footprint and total height.
+  if (p.mode === 'inner') { hw = p.w / 2 + t; hd = p.d / 2 + t; rO = p.radius + t; Ho = p.h + f; }
+  else                    { hw = p.w / 2;     hd = p.d / 2;     rO = p.radius;     Ho = p.h; }
+  rO = Math.min(rO, Math.min(hw, hd));
+
+  if (!(t > 0)) errs.push('Wall thickness must be more than 0.');
+  if (!(f > 0)) errs.push('Floor thickness must be more than 0.');
+  if (Ho <= f + 0.5) errs.push('Height must be taller than the floor thickness.');
+
+  let outer, pitch = null, extra = {}, footTop = 0;
+  if (p.stack === 'nest') {
+    // Cup style: straight taper from a smaller bottom up to the full-size top.
+    const tp = p.taper;
+    outer = [[0, -tp], [Ho, 0]];
+    if (tp <= t) warns.push(`Taper must be bigger than the wall (${fmt(t)} mm) or the boxes won't nest.`);
+    else pitch = Math.max(t * Ho / tp, f);   // a box sinks until its outside meets the inside of the box below
+    extra.angle = Math.atan(tp / Ho) * 180 / Math.PI;
+  } else if (p.stack === 'lip') {
+    // Brick style: a stepped-in foot at the bottom drops into the opening of the
+    // box below. The step is a 45 degree chamfer so it prints without supports.
+    const s = t + p.clear, L = p.foot;
+    outer = [[0, -s], [L, -s], [L + s, 0], [Ho, 0]];
+    footTop = L + s;
+    if (L + s >= Ho) errs.push('Foot is too tall for this box height.');
+    pitch = Ho - L - p.clear;
+    if (L + p.clear >= Ho - f) warns.push('Foot is deeper than the box below, it will hit the floor.');
+  } else {
+    outer = [[0, 0], [Ho, 0]];
+  }
+
+  // Make sure there's still room inside after walls and insets
+  const minInset = Math.min(...outer.map(o => o[1]));
+  if (Math.min(hw, hd) + minInset - t < 1) errs.push('Walls/taper/foot leave no room inside at this size.');
+
+  const g = { errs, warns, hw, hd, rO, t, f, Ho, outer, pitch, extra, footTop, stack: p.stack, vase };
+  g.o = z => insetAt(outer, z);
+
+  // Corner radius rule. Nesting boxes keep the SAME radius top to bottom so a
+  // steep taper doesn't sharpen the corners (a rounder corner still drops into
+  // a slightly sharper one, so nesting still works). Everything else shrinks
+  // the radius along with the size so walls and lips stay evenly thick.
+  g.follow = p.stack !== 'nest';
+  g.R = (surf, taper) => g.rO + surf + (g.follow ? taper : 0);
+
+  // --- drain holes (laid out after the profile is known, below) ---
+  const wantHoles = p.drain && !vase;
+
+  // --- size label ---
+  const anyWall = ['front', 'back', 'left', 'right'].some(k => p.faces[k]);
+  g.e = (p.emboss && p.faces.bottom && !wantHoles) ? p.textDepth : 0;   // bottom engrave depth
+  g.labelBottom = p.emboss && p.faces.bottom && !wantHoles;
+  g.labelFloor = p.emboss && p.faces.floor && !wantHoles && !vase;
+  if (p.emboss && wantHoles && (p.faces.bottom || p.faces.floor)) warns.push('Bottom/floor label is off while drain holes are on. Pick a wall for the label.');
+  if (p.emboss && vase && p.faces.floor) warns.push('Floor label is off in vase mode.');
+  if (g.e && g.e > f - 0.6) errs.push(`Floor must be at least ${fmt(g.e + 0.6)} mm thick to cut the label into the bottom.`);
+  if (p.emboss && anyWall && p.stack === 'nest') warns.push('Raised text on the outside walls will stop boxes nesting all the way. Floor or Bottom labels are safe.');
+  if (p.emboss && !Object.values(p.faces).some(Boolean)) warns.push('Pick at least one spot for the label.');
+
+  // --- edges: clamp sizes so the wall never gets cut through ---
+  let clamped = false;
+  const lim = (v, m) => { if (v > m) { clamped = true; return Math.max(0, m); } return v; };
+  const sz = p.edgeSize;
+  let sb = p.edges.bottom ? lim(sz, Math.min(t - 0.4, Ho / 3)) : 0;
+  let so = p.edges.topOuter && !vase ? sz : 0, si = p.edges.topInner && !vase ? sz : 0;
+  if (so + si > t - 0.2) { const k = (t - 0.2) / (so + si); so *= k; si *= k; clamped = true; }
+  let sc = p.edges.scoop && !vase ? lim(sz, Math.min((Math.min(hw, hd) + minInset - t) * 0.4, (Ho - f - si) * 0.5)) : 0;
+  if (clamped) warns.push('Edge size was cut down to fit the wall thickness.');
+  if (p.edges.bottom && p.edgeStyle === 'fillet' && sb > 1.2) warns.push('A big rounded bottom edge droops when printed. A chamfer prints cleaner on the bottom.');
+  const mk = s => s > 0.05 ? { s, style: p.edgeStyle } : null;
+  g.edges = { bot: mk(sb), topO: mk(so), topI: mk(si), scoop: mk(sc) };
+
+  // --- lid ---
+  g.groove = () => 0; g.grooveZ = []; g.lid = null; g.notch = null;
+  if (p.lid && !vase) {
+    const L = { fit: p.lidFit, style: p.lidFit === 'magnet' ? 'flat' : p.lidStyle, c: p.lidClear, P: p.plugDepth,
+                lt: p.lidThick, pw: p.plugWall, b: p.lidFit === 'snap' ? p.snapBump : 0,
+                snapStyle: p.snapStyle, bumpLen: p.bumpLen };
+    L.gd = L.P / 2;   // snap bump/groove sits halfway down the plug
+    if (L.lt < 0.6) errs.push('Lid thickness must be at least 0.6 mm.');
+
+    if (L.fit === 'magnet') {
+      // Magnets: no plug. Posts in the 4 inside corners of the box hold magnets at
+      // rim height, and the lid has matching pockets on its underside.
+      L.rh = (p.magD + p.magFit) / 2;
+      L.md = p.magT + 0.2;                   // a hair deeper than the magnet so it sits just below the surface
+      L.ltOrig = L.lt;
+      L.lt = Math.max(L.lt, L.md + 0.8);     // lid must be thick enough to hold the magnet
+      if (L.lt > L.ltOrig + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the magnets.`);
+      const rI = Math.max(0, g.R(-t, 0));
+      L.P2 = Math.max(L.rh + 1.2, rI + 0.05);       // half-size of each corner post
+      L.mc = [hw - t - L.P2, hd - t - L.P2];         // pocket center (top right corner; others mirror)
+      if (Math.min(hw, hd) + minInset - t < 2 * L.P2 + 2) errs.push('Box is too small inside for magnet posts.');
+      if (Ho - f < L.md + 2) errs.push('Box is too short for magnet posts.');
+      if (p.stack === 'nest') warns.push('Magnet posts in the corners stop boxes nesting.');
+    } else {
+      if (L.P < 1) errs.push('Plug depth must be at least 1 mm.');
+      if (Ho - L.P - L.c < f + 1) errs.push('Lid plug is deeper than the inside of the box.');
+      if (L.style === 'flat' && Math.min(hw, hd) + g.o(Ho - L.P) - t - L.c - L.pw < 1) errs.push('Plug walls leave no room inside the lid.');
+      // Small 45 degree lead-in on the plug tip so the lid finds the opening easily
+      L.lead = Math.max(0, Math.min(0.5, (L.style === 'flat' ? L.pw : t) - 0.4));
+      if (L.b > 0) {
+        if (L.P < 2 * (L.b + L.c) + 1.5) errs.push('Plug needs to be deeper for the snap bump.');
+        if (t - L.b < 0.8) errs.push('Wall is too thin for a snap groove. Use a thicker wall or a smaller bump.');
+        if (L.b <= L.c) warns.push('Snap bump must be bigger than the clearance or it won\'t click.');
+        const zg = Ho - L.gd, b = L.b;
+        // Box gets a V-shaped groove all the way around inside the wall; the plug gets
+        // matching V-shaped bumps. 45 degree sides on both, so neither needs supports.
+        g.groove = z => b * Math.max(0, 1 - Math.abs(z - zg) / b);
+        g.grooveZ = [zg - b, zg, zg + b];
+        L.bead = dd => b * Math.max(0, 1 - Math.abs(dd - L.gd) / b);   // dd = depth below the box top
+      } else {
+        L.bead = () => 0;
+      }
+    }
+
+    if (L.style === 'stack') {
+      // Stackable lid = a short tray. Bottom: plug that drops into this box.
+      // Middle: 45 degree flare that rests on the box's inner top edge.
+      // Top: a tray sized to catch the bottom of the next box.
+      L.seat = Ho - L.P - L.c;
+      const b0 = outer[0][1];
+      L.b0 = b0;
+      L.ti = b0 + L.c;                       // tray inside
+      L.to = Math.max(0, L.ti + t);          // tray outside (never smaller than the box)
+      L.plugTop = g.o(L.seat + L.P) - t - L.c;
+      L.zch = L.P + (L.to - L.plugTop);      // top of the 45 degree flare
+      L.O = zl => zl <= L.P ? g.o(L.seat + zl) - t - L.c
+                : zl <= L.zch ? L.plugTop + (L.to - L.plugTop) * (zl - L.P) / (L.zch - L.P)
+                : L.to;
+      L.I = zl => Math.min(L.ti, L.O(zl) - t);
+      // Where the next box comes to rest: lowest point the tray is as wide as its bottom
+      let zc = L.lt;
+      if (L.I(L.lt) < b0) {
+        for (let z = L.lt; z <= L.zch + 1e-6; z += 0.01) { if (L.I(z) >= b0 - 1e-6) { zc = z; break; } }
+      }
+      L.zc = zc;
+      L.zTop = Math.max(zc + p.rimDepth, L.zch + 0.6, L.lt + 1);
+    }
+
+    // Pull tab
+    if (p.lidTab) {
+      L.tab = { w: Math.min(p.tabW, 2 * (hw - rO) - 2), l: p.tabL };
+      if (L.style === 'stack') {
+        const maxL = L.zTop - 1.2 - 0.6 - L.zch;
+        L.tab.l = Math.min(p.tabL, maxL);
+        if (L.tab.l < 1.5) { warns.push('Stackable lid is too short for a pull tab. Raise the tray depth.'); L.tab = null; }
+        else if (L.tab.l < p.tabL - 1e-6) warns.push(`Pull tab shortened to ${fmt(L.tab.l)} mm so its underside stays at a printable 45°.`);
+      }
+      if (L.tab && L.tab.w < 4) { warns.push('Box is too narrow for a pull tab.'); L.tab = null; }
+    }
+
+    // Finger notch: a U-shaped dip in the front of the rim so a finger can get under the lid
+    if (p.notch) {
+      const w = Math.min(p.notchW, 2 * (hw - rO) - 2), dN = p.notchD;
+      if (w < 4) warns.push('Box is too narrow for a finger notch.');
+      else if (dN > Ho - f - 3) errs.push('Finger notch is deeper than the box.');
+      else g.notch = { w, d: dN, z0: Math.max(f + 1, Ho - dN - 2) };
+    }
+    g.lid = L;
+  }
+
+  // --- outside and inside surfaces with edges, groove and scoop ---
+  const E = g.edges;
+  g.O = z => g.o(z) + edgeOff(E.bot, z - g.e) + edgeOff(E.topO, Ho - z);
+  g.I = z => g.o(z) - t + g.groove(z) - edgeOff(E.topI, Ho - z) + edgeOff(E.scoop, z - f);
+
+  // --- drain hole layout ---
+  g.holes = null;
+  if (wantHoles) {
+    const oF = g.I(f), hwF = hw + oF, hdF = hd + oF, rF = g.R(oF - g.o(f), g.o(f));
+    const D = p.drainD, cells = [];
+    let RW, RH;
+    if (p.drainMode === 'one') {
+      const cs = D + 2 * Math.max(2, 0.4 * D);
+      RW = RH = cs / 2;
+      if (RW > Math.min(hwF, hdF) - 1) errs.push('Drain hole is too big for this floor.');
+      cells.push({ x0: -RW, x1: RW, y0: -RH, y1: RH, cx: 0, cy: 0 });
+    } else {
+      const nx = Math.max(1, Math.round(p.drainCols)), ny = Math.max(1, Math.round(p.drainRows));
+      let m = 1.5;
+      while (m < 30 && !insideRR(hwF - m, hdF - m, hwF - 0.5, hdF - 0.5, rF)) m += 0.25;   // keep clear of round corners
+      RW = hwF - m; RH = hdF - m;
+      const cw = 2 * RW / nx, ch = 2 * RH / ny;
+      if (D > Math.min(cw, ch) - 1) errs.push(`Holes are too big for a ${nx} × ${ny} grid. Max is about ${fmt(Math.max(0, Math.min(cw, ch) - 1))} mm.`);
+      for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+        const x0 = -RW + i * cw, y0 = -RH + j * ch;
+        cells.push({ x0, x1: x0 + cw, y0, y1: y0 + ch, cx: x0 + cw / 2, cy: y0 + ch / 2 });
+      }
+    }
+    if (RW <= 0 || RH <= 0) errs.push('Floor is too small for drain holes.');
+    // how far the floor plate tucks into the wall (it must not poke out the outside)
+    const ov = Math.max(0.1, Math.min(t * 0.5, g.O(0) - g.I(f) - 0.3));
+    g.holes = { D, cells, RW, RH, ov, hwF, hdF, rF, n: cells.length };
+  }
+
+  // --- dividers ---
+  g.divTop = Ho;
+  if (p.divOn && !vase) {
+    let auto = 0;
+    if (g.lid && g.lid.fit !== 'magnet') auto = g.lid.P + g.lid.c + 0.5;   // stay below the lid plug
+    if (p.stack === 'lip') auto = Math.max(auto, p.foot + p.clear + 0.5);   // stay below the next box's foot
+    g.divTop = Ho - p.divDrop - auto;
+    if (g.divTop < f + 1) errs.push('Dividers would be too short. Lower the "below rim" amount or the lid plug depth.');
+    if (p.stack === 'nest') warns.push('Dividers stop boxes nesting.');
+  }
+  return g;
+}
+
+// Ring helper: a ring whose surface sits at a given total inset at height z
+function ringAtInset(g, z, inset) {
+  const o = g.o(z);
+  return roundedRing(g.hw + inset, g.hd + inset, g.R(inset - o, o), z);
+}
+
+// Push the front of the rim down into a U-shape (finger notch). Points near the
+// top get lowered; points further down get lowered less, so nothing crosses over.
+function applyNotch(g, list) {
+  const { w, d, z0 } = g.notch, half = w / 2, k = Math.min(half, d);
+  const dip = x => {
+    const ax = Math.abs(x);
+    if (ax >= half) return 0;
+    if (ax <= half - k) return d;
+    return d * 0.5 * (1 + Math.cos(Math.PI * (ax - (half - k)) / k));   // rounded shoulder
+  };
+  for (const ring of list) {
+    if (ring.c) continue;
+    for (const q of ring) {
+      if (q[1] < 0 && q[2] > z0) q[2] -= dip(q[0]) * (q[2] - z0) / (g.Ho - z0);
+    }
+  }
+}
+
+// Build the box as a list of closed shells (main body first, then extras).
+// raster(maxWidth, targetHeight, padding) returns a letter picture or null.
+function buildBox(g, p, raster) {
+  const t = g.t, shells = [], labels = [], E = g.edges;
+
+  // ---------- main body ----------
+  let oz = [g.e, g.Ho, ...g.outer.map(q => q[0])];
+  if (E.bot) oz.push(...edgeSamples(E.bot).map(zr => g.e + zr));
+  if (E.topO) oz.push(...edgeSamples(E.topO).map(zr => g.Ho - zr));
+  oz = uniq(oz.filter(z => z >= g.e - 1e-9 && z <= g.Ho + 1e-9));
+  const outerRings = oz.map(z => ringAtInset(g, z, g.O(z)));
+
+  let list;
+  if (g.vase) {
+    list = [{ c: [0, 0, g.e] }, ...outerRings, { c: [0, 0, g.Ho] }];       // solid block
+  } else {
+    let iz = [g.f, g.Ho, ...g.outer.map(q => q[0]), ...g.grooveZ];
+    if (E.topI) iz.push(...edgeSamples(E.topI).map(zr => g.Ho - zr));
+    if (E.scoop) iz.push(...edgeSamples(E.scoop).map(zr => g.f + zr));
+    iz = uniq(iz.filter(z => z >= g.f - 1e-9 && z <= g.Ho + 1e-9)).reverse();
+    const innerRings = iz.map(z => ringAtInset(g, z, g.I(z)));
+    if (g.holes) {
+      // With drain holes the body is an open tube; a separate floor plate with holes fills the bottom
+      const drop = ringAtInset(g, 0, g.I(g.f));
+      list = [...outerRings, ...innerRings, drop, outerRings[0]];
+    } else {
+      list = [{ c: [0, 0, g.e] }, ...outerRings, ...innerRings, { c: [0, 0, g.f] }];
+    }
+  }
+  if (g.notch) applyNotch(g, list);
+  shells.push(stitch(list));
+
+  // ---------- floor plate with drain holes ----------
+  if (g.holes) {
+    const H = g.holes;
+    const outline = roundedRing(H.hwF + H.ov, H.hdF + H.ov, H.rF + H.ov, 0).map(q => [q[0], q[1]]);
+    const top = clipPoly(outline, 1, H.RH, true), bot = clipPoly(outline, 1, -H.RH, false);
+    const mid = clipPoly(clipPoly(outline, 1, H.RH, false), 1, -H.RH, true);
+    const left = clipPoly(mid, 0, -H.RW, false), right = clipPoly(mid, 0, H.RW, true);
+    for (const pc of [top, bot, left, right]) if (pc.length >= 3) shells.push(convexPrism([], pc, 0, g.f));
+    for (const c of H.cells) {
+      const poly = [[c.x0 - EPS, c.y0 - EPS], [c.x1 + EPS, c.y0 - EPS], [c.x1 + EPS, c.y1 + EPS], [c.x0 - EPS, c.y1 + EPS]];
+      shells.push(holedCell(poly, [c.cx, c.cy], H.D / 2, 0, g.f, 'through'));
+    }
+  }
+
+  // ---------- magnet posts in the 4 inside corners ----------
+  if (g.lid && g.lid.fit === 'magnet') {
+    for (const sx of [1, -1]) for (const sy of [1, -1]) shells.push(postShell(g, sx, sy));
+  }
+
+  // ---------- dividers ----------
+  if (p.divOn && !g.vase) buildDividers(g, p, shells);
+
+  // ---------- size labels ----------
+  if (p.emboss) buildLabels(g, p, raster, shells, labels);
+  return { shells, labels };
+}
+
+// One corner post that holds a magnet at rim height. It hugs the rounded inside
+// corner (same curve, tucked into the wall) and leans with tapered walls.
+function postShell(g, sx, sy) {
+  const L = g.lid, t = g.t, P2 = L.P2, ov = t / 2, z0 = g.f - 0.1;
+  const zs = uniq([z0, g.Ho, ...g.outer.map(q => q[0]).filter(z => z > z0 && z < g.Ho)]);
+  const center = z => { const o = g.o(z); return [sx * (g.hw + o - t - P2), sy * (g.hd + o - t - P2)]; };
+  const A = [...Array(48)].map((_, i) => 2 * Math.PI * i / 48);
+  const ringAt = z => {
+    const o = g.o(z), c = center(z), r = g.R(-t, o) + ov;
+    const poly = roundedRing(P2 + ov, P2 + ov, r, 0).map(q => [q[0] + c[0], q[1] + c[1]]);
+    return A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], z]; });
+  };
+  const cT = center(g.Ho), c0 = center(z0);
+  const hole = z => A.map(a => [cT[0] + L.rh * Math.cos(a), cT[1] + L.rh * Math.sin(a), z]);
+  return stitch([{ c: [c0[0], c0[1], z0] }, ...zs.map(ringAt), hole(g.Ho), hole(g.Ho - L.md), { c: [cT[0], cT[1], g.Ho - L.md] }]);
+}
+
+// Divider walls. Each line (column or row) is split into pieces between the
+// lines that cross it; pieces can be switched off. Ends that hit the box wall
+// follow the wall (including round corners and tapers) and tuck halfway into it.
+function buildDividers(g, p, shells) {
+  const t = g.t, dt = p.divThick, Wi = 2 * (g.hw - t), Di = 2 * (g.hd - t);
+  const xs = [...p.divXs].sort((a, b) => a - b).map(v => -Wi / 2 + v);
+  const ys = [...p.divYs].sort((a, b) => a - b).map(v => -Di / 2 + v);
+  const zb = g.f - 0.1, ztop = g.divTop;
+  const zs = uniq([zb, ztop, ...g.outer.map(q => q[0]).filter(z => z > zb && z < ztop)]);
+  const inner = z => {
+    const o = g.o(z), hwI = g.hw + o - t, hdI = g.hd + o - t;
+    return { hwI, hdI, r: Math.max(R_MIN, Math.min(g.R(-t, o), hwI - 0.01, hdI - 0.01)) };
+  };
+  // inside wall position on the other axis, at coordinate a along this axis
+  const reach = (a, halfA, halfB, r) => {
+    const ax = Math.abs(a);
+    if (ax <= halfA - r) return halfB;
+    const dx = ax - (halfA - r);
+    return halfB - r + Math.sqrt(Math.max(0, r * r - dx * dx));
+  };
+  const Ib = inner(zb);
+  let skipped = 0;
+  const addSeg = corner => {
+    for (let m = 0; m < zs.length - 1; m++) {
+      const za = zs[m], zc = zs[m + 1], sh = [];
+      cuboid(sh, (i, j, k) => corner(i, j, k ? zc : za));
+      shells.push(sh);
+    }
+  };
+  xs.forEach((x, i) => {
+    if (Math.abs(x) + dt / 2 > Ib.hwI - 0.5) { skipped++; return; }   // too close to a wall at the bottom
+    for (let k = 0; k <= ys.length; k++) {
+      if (p.divOff.has('c' + i + ':' + k)) continue;
+      addSeg((ii, jj, z) => {
+        const xf = x + (ii ? dt / 2 : -dt / 2), I = inner(z);
+        if (jj === 0) return [xf, k === 0 ? -reach(xf, I.hwI, I.hdI, I.r) - t / 2 : ys[k - 1] - dt / 2, z];
+        return [xf, k === ys.length ? reach(xf, I.hwI, I.hdI, I.r) + t / 2 : ys[k] + dt / 2, z];
+      });
+    }
+  });
+  ys.forEach((y, j) => {
+    if (Math.abs(y) + dt / 2 > Ib.hdI - 0.5) { skipped++; return; }
+    for (let k = 0; k <= xs.length; k++) {
+      if (p.divOff.has('r' + j + ':' + k)) continue;
+      addSeg((ii, jj, z) => {
+        const yf = y + (jj ? dt / 2 : -dt / 2), I = inner(z);
+        if (ii === 0) return [k === 0 ? -reach(yf, I.hdI, I.hwI, I.r) - t / 2 : xs[k - 1] - dt / 2, yf, z];
+        return [k === xs.length ? reach(yf, I.hdI, I.hwI, I.r) + t / 2 : xs[k] + dt / 2, yf, z];
+      });
+    }
+  });
+  if (skipped) g.warns.push(`${skipped} divider${skipped > 1 ? 's are' : ' is'} too close to a wall and left out.`);
+}
+
+// Size labels: raised on floor/walls, cut into the bottom
+function buildLabels(g, p, raster, shells, labels) {
+  const t = g.t, E = g.edges;
+  const EMB = 0.1;    // label pieces sink this far into the surface so they fuse with it
+  const d = p.textDepth;
+  const addRects = (rects, fn) => {
+    for (const r of rects) { const sh = []; fn(sh, r[0] - EPS, r[1] - EPS, r[2] + EPS, r[3] + EPS); shells.push(sh); }
+  };
+
+  // Inside floor: raised letters, read from above with the front of the box toward you
+  if (g.labelFloor) {
+    const oF = g.I(g.f), hwF = g.hw + oF, hdF = g.hd + oF;
+    const m = 1.5 + Math.max(0, g.R(oF - g.o(g.f), g.o(g.f))) * 0.3;
+    const ras = raster(2 * (hwF - m), Math.min(p.textH, 2 * (hdF - m)), 0);
+    if (ras) {
+      labels.push(['Floor', ras.hMm]);
+      addRects(bitmapRects(ras, 1), (sh, u0, v0, u1, v1) => boxTris(sh, u0, u1, v0, v1, g.f - EMB, g.f + d));
+    } else labels.push(['Floor', 0]);
+  }
+
+  // Bottom: letters cut in, mirrored so they read right when you flip the box over.
+  // The base slab is 4 plain pieces around the label area plus the gaps between letters.
+  if (g.labelBottom && g.e > 0) {
+    const oB = g.O(g.e), hb = g.hw + oB, db = g.hd + oB, rb = g.R(oB - g.o(g.e), g.o(g.e)), pad = 1;
+    const zTop = g.e + 0.05;
+    const poly = roundedRing(hb, db, rb, 0).map(q => [q[0], q[1]]);
+    const ras = raster(2 * (hb - 2.5) - 2 * pad, Math.min(p.textH, 2 * (db - 2.5) - 2 * pad), pad);
+    const LW = ras ? ras.W * ras.px / 2 : 0, LH = ras ? ras.H * ras.px / 2 : 0;
+    if (!ras || !insideRR(LW, LH, hb - 0.5, db - 0.5, rb - 0.5)) {
+      shells.push(convexPrism([], poly, 0, zTop));   // no room: plain solid slab
+      labels.push(['Bottom', 0]);
+    } else {
+      const top = clipPoly(poly, 1, LH, true), bot = clipPoly(poly, 1, -LH, false);
+      const mid = clipPoly(clipPoly(poly, 1, LH, false), 1, -LH, true);
+      const left = clipPoly(mid, 0, -LW, false), right = clipPoly(mid, 0, LW, true);
+      for (const pc of [top, bot, left, right]) if (pc.length >= 3) shells.push(convexPrism([], pc, 0, zTop));
+      addRects(bitmapRects(ras, 0), (sh, u0, v0, u1, v1) => boxTris(sh, -u1, -u0, v0, v1, 0, zTop));
+      labels.push(['Bottom', ras.hMm]);
+    }
+  }
+
+  // Outside walls: raised letters on the flat part of each wall (between the rounded corners).
+  // On tapered boxes the letters lean with the wall.
+  const walls = {
+    front: { U: [1, 0, 0],  N: [0, -1, 0], half: g.hd, along: g.hw },
+    back:  { U: [-1, 0, 0], N: [0, 1, 0],  half: g.hd, along: g.hw },
+    right: { U: [0, 1, 0],  N: [1, 0, 0],  half: g.hw, along: g.hd },
+    left:  { U: [0, -1, 0], N: [-1, 0, 0], half: g.hw, along: g.hd }
+  };
+  const zLow = (g.stack === 'lip' ? g.footTop : g.e) + (E.bot ? E.bot.s : 0) + 1.5;
+  for (const [name, W] of Object.entries(walls)) {
+    if (!p.faces[name]) continue;
+    const zHigh = g.Ho - (E.topO ? E.topO.s : 0) - 1.5 - (name === 'front' && g.notch ? g.notch.d : 0);
+    const label = name[0].toUpperCase() + name.slice(1);
+    const oL = g.o(zLow), flat = W.along + oL - g.R(0, oL);
+    const ras = zHigh > zLow + 1 ? raster(2 * (flat - 1), Math.min(p.textH, zHigh - zLow), 0) : null;
+    if (!ras) { labels.push([label, 0]); continue; }
+    const zc = (zLow + zHigh) / 2;
+    const P = (u, z, dd) => { const k = W.half + g.o(z) + dd; return [W.U[0] * u + W.N[0] * k, W.U[1] * u + W.N[1] * k, z]; };
+    addRects(bitmapRects(ras, 1), (sh, u0, v0, u1, v1) =>
+      cuboid(sh, (i, j, k) => P(i ? u1 : u0, zc + (j ? v1 : v0), k ? d : -EMB)));
+    labels.push([label, ras.hMm]);
+  }
+}
+
+// Build the lid in the position it should be printed in. Returns closed shells.
+function buildLid(g) {
+  const L = g.lid, t = g.t, shells = [];
+  const ring = (z, taper, surf) => roundedRing(g.hw + taper + surf, g.hd + taper + surf, g.R(surf, taper), z);
+
+  // Plug ring with snap bumps. 'ring' = bump all the way around. 'sides' = a short
+  // bump in the middle of each side only (the middle of a side flexes most, so
+  // the lid goes on and comes off much easier than a full ring).
+  const plugRing = (z, taper, surf, bump) => {
+    if (!bump) return ring(z, taper, surf);
+    if (L.snapStyle === 'ring') return ring(z, taper, surf + bump);
+    const hwP = g.hw + taper + surf, hdP = g.hd + taper + surf, r = Math.max(R_MIN, g.R(surf, taper));
+    const halfX = Math.max(0, Math.min(L.bumpLen / 2, hwP - r - 1)), halfY = Math.max(0, Math.min(L.bumpLen / 2, hdP - r - 1));
+    return roundedRing(hwP, hdP, r, z, (side, s) =>
+      bump * Math.max(0, Math.min(1, ((side % 2 === 0 ? halfX : halfY) - Math.abs(s)) / 1.5)));
+  };
+  // The flat lid prints upside down, so its bed side is the top you see. It gets the same edge as the box bottom.
+  const bedEdge = maxS => {
+    const Eb = g.edges.bot ? { s: Math.min(g.edges.bot.s, maxS), style: g.edges.bot.style } : null;
+    if (Eb && Eb.s > 0.05) return edgeSamples(Eb).map(zr => ring(zr, 0, edgeOff(Eb, zr)));
+    return [ring(0, 0, 0)];
+  };
+
+  if (L.fit === 'magnet') {
+    // Magnet lid: plate with 4 pockets on its underside (printed facing up, so no bridges)
+    const zp = L.lt - L.md, z0 = zp - 0.05;
+    shells.push(stitch([{ c: [0, 0, 0] }, ...bedEdge(zp - 0.2), ring(zp, 0, 0), { c: [0, 0, zp] }]));
+    const outline = roundedRing(g.hw, g.hd, g.rO, 0).map(q => [q[0], q[1]]);
+    const [cx, cy] = L.mc, X0 = cx - L.rh - 1.5, Y0 = cy - L.rh - 1.5;
+    for (const sx of [1, -1]) for (const sy of [1, -1]) {
+      const poly = clipPoly(clipPoly(outline, 0, sx * X0, sx > 0), 1, sy * Y0, sy > 0);
+      shells.push(holedCell(poly, [sx * cx, sy * cy], L.rh, z0, L.lt, 'through'));
+    }
+    const mid = clipPoly(clipPoly(outline, 1, Y0, false), 1, -Y0, true);
+    const topB = clipPoly(clipPoly(clipPoly(outline, 1, Y0, true), 0, X0, false), 0, -X0, true);
+    const botB = clipPoly(clipPoly(clipPoly(outline, 1, -Y0, false), 0, X0, false), 0, -X0, true);
+    for (const pc of [mid, topB, botB]) if (pc.length >= 3) shells.push(convexPrism([], pc, z0, L.lt));
+  } else if (L.style === 'flat') {
+    // Flat lid, printed plate-down with the plug pointing up. It's basically a very
+    // shallow box: plate = floor, plug = walls, plus a lip that rests on the box rim.
+    const taper = dd => g.o(g.Ho - dd);     // plug follows the box's inner wall (matters for tapered boxes)
+    let ds = [0, L.P - L.lead, L.P];
+    if (L.b) ds.push(L.gd - L.b, L.gd, L.gd + L.b);
+    for (const [z] of g.outer) { const dd = g.Ho - z; if (dd > 0 && dd < L.P) ds.push(dd); }
+    ds = uniq(ds.filter(dd => dd >= 0 && dd <= L.P));
+    const lead = dd => dd > L.P - L.lead ? dd - (L.P - L.lead) : 0;
+    const list = [{ c: [0, 0, 0] }, ...bedEdge(L.lt - 0.3), ring(L.lt, 0, 0)];
+    for (const dd of ds) list.push(plugRing(L.lt + dd, taper(dd), -t - L.c - lead(dd), L.bead(dd)));
+    for (const dd of [...ds].reverse()) list.push(ring(L.lt + dd, taper(dd), -t - L.c - L.pw));
+    list.push({ c: [0, 0, L.lt] });
+    shells.push(stitch(list));
+  } else {
+    // Stackable lid, printed right side up like the box (plug on the bed).
+    const bead = zl => L.bead(L.P + L.c - zl);
+    const lead = zl => zl < L.lead ? L.lead - zl : 0;
+    let zs = [0, L.lead, L.P];
+    if (L.b) { const zb = L.P + L.c - L.gd; zs.push(zb - L.b, zb, zb + L.b); }
+    for (const [z] of g.outer) { const zl = z - L.seat; if (zl > 0 && zl < L.P) zs.push(zl); }
+    zs = uniq(zs.filter(z => z >= 0 && z <= L.P));
+    const list = [{ c: [0, 0, 0] }];
+    for (const zl of zs) list.push(plugRing(zl, g.o(L.seat + zl), -t - L.c - lead(zl), bead(zl)));   // plug
+    list.push(ring(L.zch, 0, L.to), ring(L.zTop, 0, L.to));                                          // flare + tray outside
+    // Inside: tray, then narrowing to keep at least one wall thickness through the flare and plug
+    const zi = [L.zTop, L.zch, ...zs];
+    const oP = L.O(L.P), zStar = L.P + (L.ti + t - oP) * (L.zch - L.P) / (L.to - oP);
+    if (zStar > L.P && zStar < L.zch) zi.push(zStar);
+    const inner = uniq(zi.filter(z => z > L.lt + 1e-6)).reverse();
+    for (const z of inner) list.push(ring(z, 0, L.I(z)));
+    list.push(ring(L.lt, 0, L.I(L.lt)));
+    list.push({ c: [0, 0, L.lt] });
+    shells.push(stitch(list));
+  }
+
+  // Pull tab
+  if (L.tab) {
+    const { w, l } = L.tab;
+    if (L.style === 'stack') {
+      // Wedge on the front of the tray, flush with the top, underside at 45 degrees (no supports)
+      const yo = -(g.hd + L.to), yw = yo + 0.6, th = 1.2, zD = L.zTop - th - (l + 0.6);
+      const poly = [[yw, L.zTop], [yo - l, L.zTop], [yo - l, L.zTop - th], [yw, zD]];
+      const local = convexPrism([], poly, 0, 1);
+      shells.push(local.map(tri => tri.map(([a, b, c]) => [-w / 2 + c * w, a, b])));
+    } else {
+      // Flat tab on the plate edge. Printed upside down, so it sits at +Y here and ends up at the front.
+      const rr = Math.min(w / 2, l) * 0.6;
+      const poly = roundedRing(w / 2, (l + 1) / 2, rr, 0).map(q => [q[0], q[1] + g.hd + (l - 1) / 2]);
+      shells.push(convexPrism([], poly, 0, L.lt));
+    }
+  }
+  return shells;
+}
+
+// Magnet test bar: 3 pockets (a little tighter, your setting, a little looser) with a
+// small push-out hole under each. Cut corner marks the tight end.
+function buildMagnetTest(p) {
+  const D = p.magD, md = p.magT + 0.2, H = md + 1.2, rs = Math.max(0.8, Math.min(1.5, D * 0.2));
+  const S = D + 0.35 + 2 * 2.4, shells = [];
+  for (let k = 0; k < 3; k++) {
+    const a = Math.max(0, p.magFit + (k - 1) * 0.1), rh = (D + a) / 2, cx = (k - 1) * S;
+    const x0 = cx - S / 2 - EPS, x1 = cx + S / 2 + EPS, y0 = -S / 2, y1 = S / 2;
+    const poly = k === 0 ? [[x0, y0], [x1, y0], [x1, y1], [x0 + 2.5, y1], [x0, y1 - 2.5]]
+                         : [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    shells.push(holedCell(poly, [cx, 0], rh, 0, H, 'stepped', H - md, rs));
+  }
+  return shells;
+}
+
+// Volume of closed shells (mm^3). Also a sanity check: it's only positive
+// if every triangle faces outward.
+function meshVolume(tris) {
+  let v = 0;
+  for (const [a, b, c] of tris) {
+    v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+  }
+  return v / 6;
+}
+
+function fmt(v) { return (Math.round(v * 100) / 100).toString(); }
+// GEOMETRY END
+
+/* =====================================================================
+   LABEL TEXT -> PICTURE
+   Draws the text on a hidden canvas at 10 pixels per mm (0.1 mm, finer
+   than any nozzle can print) and reads back which pixels are ink.
+   Uses whatever bold font the computer has, so nothing to download.
+   ===================================================================== */
+const rasterCache = new Map();
+function makeRaster(text) {
+  return (maxW, targetH, pad) => {
+    if (!text || !(maxW >= 2) || !(targetH >= 1)) return null;
+    const key = [text, maxW.toFixed(2), targetH.toFixed(2), pad].join('|');
+    if (rasterCache.has(key)) return rasterCache.get(key);
+    const PX = 10, FONT = '"Arial Black", "Helvetica Neue", Arial, sans-serif';
+    const cv = document.createElement('canvas');
+    let ctx = cv.getContext('2d');
+    ctx.font = `900 100px ${FONT}`;
+    const m = ctx.measureText(text);
+    const w100 = m.actualBoundingBoxLeft + m.actualBoundingBoxRight;
+    const h100 = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+    if (!(w100 > 0 && h100 > 0)) return null;
+    let s = targetH * PX / h100;                    // scale to the wanted letter height...
+    if (w100 * s > maxW * PX) s = maxW * PX / w100; // ...but shrink if it's too wide to fit
+    const padPx = Math.round(pad * PX);
+    const W = Math.ceil(w100 * s) + 2 * padPx + 2, H = Math.ceil(h100 * s) + 2 * padPx + 2;
+    cv.width = W; cv.height = H;
+    ctx = cv.getContext('2d');
+    ctx.font = `900 ${100 * s}px ${FONT}`;
+    ctx.fillStyle = '#000';
+    ctx.fillText(text, padPx + 1 + m.actualBoundingBoxLeft * s, padPx + 1 + m.actualBoundingBoxAscent * s);
+    const img = ctx.getImageData(0, 0, W, H).data;
+    const bits = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) bits[i] = img[i * 4 + 3] > 127 ? 1 : 0;
+    const ras = { W, H, px: 1 / PX, bits, hMm: h100 * s / PX, wMm: w100 * s / PX };
+    rasterCache.set(key, ras);
+    if (rasterCache.size > 60) rasterCache.delete(rasterCache.keys().next().value);
+    return ras;
+  };
+}
+function autoLabel() { return `${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)} ${state.mode === 'inner' ? 'IN' : 'OUT'}`; }
+function labelText() { return state.labelText.trim() || autoLabel(); }
+
+/* =====================================================================
+   STL EXPORT
+   Binary STL: 80-byte header, triangle count, then 50 bytes per triangle.
+   Binary is much smaller than text STL and every slicer reads it.
+   ===================================================================== */
+function makeSTL(tris) {
+  const buf = new ArrayBuffer(84 + 50 * tris.length);
+  const dv = new DataView(buf);
+  const header = 'Box Maker STL (mm)';
+  for (let i = 0; i < header.length; i++) dv.setUint8(i, header.charCodeAt(i));
+  dv.setUint32(80, tris.length, true);
+  let off = 84;
+  for (const [a, b, c] of tris) {
+    const n = triNormal(a, b, c);
+    for (const v of [n, a, b, c]) {
+      dv.setFloat32(off, v[0], true); dv.setFloat32(off + 4, v[1], true); dv.setFloat32(off + 8, v[2], true);
+      off += 12;
+    }
+    dv.setUint16(off, 0, true); off += 2;
+  }
+  return buf;
+}
+
+function triNormal(a, b, c) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+// File name: date, then the dimensions the user typed, then inner/outer
+// (so a 50 inner and a 50 outer box don't end up with the same name).
+function fileBase() {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  return `${date}_${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)}_${state.mode}`;
+}
+
+function download(tris, name) {
+  const blob = new Blob([makeSTL(tris)], { type: 'model/stl' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* =====================================================================
+   3D VIEWER (plain WebGL)
+   Small hand-written renderer: one shader for parts (simple lighting),
+   one for the build plate grid. Camera orbits around a target point
+   like Bambu Studio: left-drag rotate, right/middle-drag pan, scroll zoom.
+   ===================================================================== */
+const canvas = document.getElementById('view');
+const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+const FOV = 40 * Math.PI / 180;
+
+// --- small vector/matrix helpers (matrices are column-major, WebGL style) ---
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function lookAt(e, c, up) {
+  const z = norm(sub(e, c)), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+function mul(a, b) {
+  const o = new Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+
+// --- camera: orbit around target. Z is up, like the printer. ---
+const cam = { theta: -Math.PI * 0.72, phi: 0.55, dist: 200, target: [0, 0, 25] };
+function camEye() {
+  const cp = Math.cos(cam.phi);
+  return [cam.target[0] + cam.dist * cp * Math.cos(cam.theta),
+          cam.target[1] + cam.dist * cp * Math.sin(cam.theta),
+          cam.target[2] + cam.dist * Math.sin(cam.phi)];
+}
+function camBasis() {
+  const eye = camEye();
+  const z = norm(sub(eye, cam.target)), right = norm(cross([0, 0, 1], z)), up = cross(z, right);
+  return { eye, right, up };
+}
+
+// --- shaders ---
+function compile(vsSrc, fsSrc, attribs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fsSrc));
+  attribs.forEach((name, i) => gl.bindAttribLocation(p, i, name)); // fixed slots: 0 = position, 1 = normal
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
+  return { p, u };
+}
+
+let meshProg, lineProg;
+const buffers = {};
+const meshes = { box: null, lid: null, mag: null };
+
+function initGL() {
+  // Part shader: soft key light + a "headlight" from the camera so nothing goes black.
+  // uFlip = -1 turns a part upside down (used to show the flat lid sitting on the box).
+  // The cut option throws away the half of each part nearest the camera.
+  meshProg = compile(`
+    attribute vec3 aPos; attribute vec3 aNor;
+    uniform mat4 uMVP; uniform vec3 uOffset; uniform float uFlip;
+    varying vec3 vNor; varying vec3 vPos;
+    void main() {
+      vec3 p = vec3(aPos.x, aPos.y * uFlip, aPos.z * uFlip) + uOffset;
+      vNor = vec3(aNor.x, aNor.y * uFlip, aNor.z * uFlip);
+      vPos = p;
+      gl_Position = uMVP * vec4(p, 1.0);
+    }
+  `, `
+    precision mediump float;
+    uniform vec3 uColor; uniform vec3 uEye; uniform float uAlpha;
+    uniform float uCut; uniform vec2 uCutDir; uniform vec2 uCutCenter;
+    varying vec3 vNor; varying vec3 vPos;
+    void main() {
+      if (uCut > 0.5 && dot(vPos.xy - uCutCenter, uCutDir) > 0.0) discard;
+      vec3 n = normalize(vNor);
+      vec3 base = uColor;
+      if (!gl_FrontFacing) { n = -n; base *= 0.55; }   // inside faces show darker in cut view
+      vec3 v = normalize(uEye - vPos);
+      vec3 l = normalize(vec3(0.4, -0.6, 1.0));
+      float diff = max(dot(n, l), 0.0) * 0.5 + max(dot(n, v), 0.0) * 0.35 + 0.28;
+      float spec = pow(max(dot(n, normalize(l + v)), 0.0), 40.0) * 0.18;
+      gl_FragColor = vec4(base * diff + spec, uAlpha);
+    }
+  `, ['aPos', 'aNor']);
+
+  lineProg = compile(`
+    attribute vec3 aPos; uniform mat4 uMVP;
+    void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
+  `, `
+    precision mediump float; uniform vec4 uColor;
+    void main() { gl_FragColor = uColor; }
+  `, ['aPos']);
+
+  // Build plate: 256 x 256 mm with a 10 mm grid, darker lines every 50 mm.
+  // Sits a hair below z=0 so it doesn't flicker against the box bottom.
+  const S = 128, zP = -0.06, zL = -0.04;
+  const minor = [], major = [];
+  for (let v = -S; v <= S; v += 10) {
+    const arr = (v % 50 === 0) ? major : minor;
+    arr.push(v, -S, zL, v, S, zL, -S, v, zL, S, v, zL);
+  }
+  buffers.plate = makeBuf([-S, -S, zP, S, -S, zP, S, S, zP, -S, -S, zP, S, S, zP, -S, S, zP]);
+  buffers.minor = makeBuf(minor); buffers.minorN = minor.length / 3;
+  buffers.major = makeBuf(major); buffers.majorN = major.length / 3;
+}
+
+function makeBuf(arr) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, arr instanceof Float32Array ? arr : new Float32Array(arr), gl.STATIC_DRAW);
+  return b;
+}
+
+// Send a part's triangles to the GPU (flat shading: one normal per triangle).
+// Also remembers the part's size box, used for "fit view".
+function makeMesh(tris) {
+  const pos = new Float32Array(tris.length * 9), nor = new Float32Array(tris.length * 9);
+  const b = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+  let i = 0;
+  for (const [a, bb, c] of tris) {
+    const n = triNormal(a, bb, c);
+    for (const v of [a, bb, c]) {
+      pos.set(v, i); nor.set(n, i); i += 3;
+      b[0] = Math.min(b[0], v[0]); b[1] = Math.max(b[1], v[0]);
+      b[2] = Math.min(b[2], v[1]); b[3] = Math.max(b[3], v[1]);
+      b[4] = Math.min(b[4], v[2]); b[5] = Math.max(b[5], v[2]);
+    }
+  }
+  return { pb: makeBuf(pos), nb: makeBuf(nor), count: tris.length * 3, b };
+}
+function freeMesh(m) { if (m) { gl.deleteBuffer(m.pb); gl.deleteBuffer(m.nb); } }
+
+function hexToRgb(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+// Everything to draw right now: the box, the lid (beside it or on it), the magnet test, and ghost stack copies.
+function sceneObjects() {
+  const g = current, objs = [];
+  if (!g || !meshes.box) return objs;
+  const base = hexToRgb(state.color), light = base.map(v => v + (1 - v) * 0.35), dark = base.map(v => v * 0.75);
+  objs.push({ m: meshes.box, off: [0, 0, 0], flip: 1, alpha: 1, color: base });
+  const hasLid = state.lid && g.lid && meshes.lid;
+  const lidOn = hasLid && state.lidView === 'on';
+  if (hasLid) {
+    if (lidOn) {
+      // Flat and magnet lids print upside down, so flip them over to sit them on the box
+      if (g.lid.style === 'flat') objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.lt], flip: -1, alpha: 1, color: light });
+      else objs.push({ m: meshes.lid, off: [0, 0, g.lid.seat], flip: 1, alpha: 1, color: light });
+    } else {
+      const lidHalf = g.hw + (g.lid.style === 'stack' ? g.lid.to : 0);
+      objs.push({ m: meshes.lid, off: [g.hw + lidHalf + 12, 0, 0], flip: 1, alpha: 1, color: light });
+    }
+  }
+  if (hasLid && g.lid.fit === 'magnet' && meshes.mag) {
+    const mh = (meshes.mag.b[1] - meshes.mag.b[0]) / 2;
+    objs.push({ m: meshes.mag, off: [-(g.hw + mh + 12), 0, 0], flip: 1, alpha: 1, color: dark });
+  }
+  if (state.preview) {
+    if (lidOn) {
+      if (g.lid.style === 'stack') objs.push({ m: meshes.box, off: [0, 0, g.lid.seat + g.lid.zc], flip: 1, alpha: 0.35, color: base });
+    } else if (g.pitch) {
+      for (let k = 1; k <= 2; k++) objs.push({ m: meshes.box, off: [0, 0, g.pitch * k], flip: 1, alpha: 0.35, color: base });
+    }
+  }
+  return objs;
+}
+function objBounds(o) {
+  const [x0, x1, y0, y1, z0, z1] = o.m.b;
+  const ys = o.flip < 0 ? [-y1, -y0] : [y0, y1], zs = o.flip < 0 ? [-z1, -z0] : [z0, z1];
+  return [x0 + o.off[0], x1 + o.off[0], ys[0] + o.off[1], ys[1] + o.off[1], zs[0] + o.off[2], zs[1] + o.off[2]];
+}
+
+// Draw only when something changed, instead of burning CPU every frame
+let renderQueued = false;
+function requestRender() { if (gl && !renderQueued) { renderQueued = true; requestAnimationFrame(render); } }
+
+function render() {
+  renderQueued = false;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+  gl.clearColor(0.965, 0.973, 0.98, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+
+  const { eye } = camBasis();
+  const proj = perspective(FOV, w / h, Math.max(0.1, cam.dist * 0.01), cam.dist * 50 + 2000);
+  const mvp = mul(proj, lookAt(eye, cam.target, [0, 0, 1]));
+
+  // --- build plate (hidden when looking from underneath so it doesn't block the parts) ---
+  gl.useProgram(lineProg.p);
+  gl.uniformMatrix4fv(lineProg.u.uMVP, false, mvp);
+  gl.disableVertexAttribArray(1);
+  gl.enableVertexAttribArray(0);
+  if (eye[2] > 0) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.plate); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.uniform4f(lineProg.u.uColor, 0.91, 0.93, 0.945, 1); gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.minor); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.uniform4f(lineProg.u.uColor, 0.80, 0.83, 0.86, 1); gl.drawArrays(gl.LINES, 0, buffers.minorN);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.major); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.uniform4f(lineProg.u.uColor, 0.66, 0.70, 0.75, 1); gl.drawArrays(gl.LINES, 0, buffers.majorN);
+
+  const objs = sceneObjects();
+  if (!objs.length) return;
+
+  // --- parts ---
+  gl.useProgram(meshProg.p);
+  const u = meshProg.u;
+  gl.uniformMatrix4fv(u.uMVP, false, mvp);
+  gl.uniform3fv(u.uEye, eye);
+  gl.uniform1f(u.uCut, state.cut ? 1 : 0);
+  const cd = norm([eye[0] - cam.target[0], eye[1] - cam.target[1], 0]);
+  gl.uniform2f(u.uCutDir, cd[0], cd[1]);
+  gl.enableVertexAttribArray(1);
+
+  const draw = o => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, o.m.pb); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, o.m.nb); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.uniform3fv(u.uOffset, o.off);
+    gl.uniform1f(u.uFlip, o.flip);
+    gl.uniform1f(u.uAlpha, o.alpha);
+    gl.uniform3fv(u.uColor, o.color);
+    gl.uniform2f(u.uCutCenter, o.off[0], o.off[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, o.m.count);
+  };
+  // Solid parts first, then see-through ghosts on top
+  objs.filter(o => o.alpha >= 1).forEach(draw);
+  const ghosts = objs.filter(o => o.alpha < 1);
+  if (ghosts.length) {
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+    ghosts.forEach(draw);
+    gl.depthMask(true); gl.disable(gl.BLEND);
+  }
+}
+
+/* =====================================================================
+   MOUSE / TOUCH CONTROLS (Bambu Studio style)
+   Left drag = rotate, right or middle drag (or shift+left) = pan,
+   wheel = zoom toward the cursor. Touch: 1 finger rotate, 2 fingers pinch/pan.
+   ===================================================================== */
+const pointers = new Map();
+let dragMode = null, pinch = null;
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (e.pointerType === 'mouse') dragMode = (e.button === 0 && !e.shiftKey) ? 'rotate' : 'pan';
+  else dragMode = pointers.size === 1 ? 'rotate' : 'pinch';
+  pinch = null;
+});
+canvas.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size === 2 && e.pointerType !== 'mouse') {
+    const [a, b] = [...pointers.values()];
+    const distNow = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (pinch) {
+      zoomBy(pinch.dist / distNow);
+      pan(mid.x - pinch.mid.x, mid.y - pinch.mid.y);
+    }
+    pinch = { dist: distNow, mid };
+  } else if (dragMode === 'rotate') {
+    cam.theta -= dx * 0.008;
+    cam.phi = Math.max(-1.5697, Math.min(1.5697, cam.phi + dy * 0.008));
+  } else if (dragMode === 'pan') {
+    pan(dx, dy);
+  }
+  requestRender();
+});
+const endPointer = e => {
+  pointers.delete(e.pointerId);
+  pinch = null;
+  if (pointers.size === 0) dragMode = null;
+  else if (pointers.size === 1) dragMode = 'rotate';
+};
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+
+function pan(dx, dy) {
+  const { right, up } = camBasis();
+  const s = cam.dist * 2 * Math.tan(FOV / 2) / canvas.clientHeight;
+  for (let i = 0; i < 3; i++) cam.target[i] += -right[i] * dx * s + up[i] * dy * s;
+}
+function zoomBy(factor) { cam.dist = Math.max(5, Math.min(4000, cam.dist * factor)); }
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  const ny = 1 - ((e.clientY - rect.top) / rect.height) * 2;
+  const { right, up } = camBasis();
+  const halfH = cam.dist * Math.tan(FOV / 2), halfW = halfH * rect.width / rect.height;
+  const delta = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
+  const newDist = Math.max(5, Math.min(4000, cam.dist * Math.exp(delta * 0.0015)));
+  // Slide the target toward the cursor so the point under the mouse stays put
+  const k = 1 - newDist / cam.dist;
+  for (let i = 0; i < 3; i++) cam.target[i] += (right[i] * nx * halfW + up[i] * ny * halfH) * k;
+  cam.dist = newDist;
+  requestRender();
+}, { passive: false });
+
+// Preset views, same number keys as Bambu Studio
+function setView(name) {
+  const views = {
+    iso: [-Math.PI * 0.72, 0.55], top: [-Math.PI / 2, 1.5697], bottom: [-Math.PI / 2, -1.5697],
+    front: [-Math.PI / 2, 0], rear: [Math.PI / 2, 0], left: [Math.PI, 0], right: [0, 0]
+  };
+  if (views[name]) [cam.theta, cam.phi] = views[name];
+  fitView();
+}
+function fitView() {
+  const objs = sceneObjects();
+  if (!objs.length) return;
+  const B = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+  for (const o of objs) {
+    const b = objBounds(o);
+    for (let i = 0; i < 6; i += 2) { B[i] = Math.min(B[i], b[i]); B[i + 1] = Math.max(B[i + 1], b[i + 1]); }
+  }
+  cam.target = [(B[0] + B[1]) / 2, (B[2] + B[3]) / 2, (B[4] + B[5]) / 2];
+  const radius = Math.hypot(B[1] - B[0], B[3] - B[2], B[5] - B[4]) / 2;
+  const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+  const fovMin = Math.min(FOV, 2 * Math.atan(Math.tan(FOV / 2) * aspect));
+  cam.dist = radius / Math.sin(fovMin / 2) * 1.05;
+  requestRender();
+}
+document.querySelectorAll('#views button').forEach(b =>
+  b.addEventListener('click', () => b.dataset.view === 'fit' ? fitView() : setView(b.dataset.view)));
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;  // don't hijack typing in the number/text boxes
+  const map = { '0': 'iso', '1': 'top', '2': 'bottom', '3': 'front', '4': 'rear', '5': 'left', '6': 'right' };
+  if (map[e.key]) setView(map[e.key]);
+  else if (e.key === 'z' || e.key === 'Z') fitView();
+});
+
+/* =====================================================================
+   CONTROLS UI
+   Each number has a slider and a text box that stay in sync. The text
+   box can go past the slider's range if you need something unusual.
+   sliders[key].set(v) lets code change a value (used for presets).
+   ===================================================================== */
+const sliders = {};
+function addSlider(parentId, key, label, min, max, step, unit = 'mm') {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  wrap.innerHTML = `<div class="row"><label>${label}</label>
+    <span class="num"><input type="number" min="0" step="${step}"><em>${unit}</em></span></div>
+    <input type="range" min="${min}" max="${max}" step="${step}">`;
+  const num = wrap.querySelector('input[type=number]'), rng = wrap.querySelector('input[type=range]');
+  num.value = state[key]; rng.value = state[key];
+  rng.addEventListener('input', () => { state[key] = +rng.value; num.value = rng.value; update(); });
+  num.addEventListener('input', () => {
+    const v = parseFloat(num.value);
+    if (isFinite(v) && v >= 0) { state[key] = v; rng.value = v; update(); }
+  });
+  document.getElementById(parentId).appendChild(wrap);
+  sliders[key] = { wrap, set: v => { state[key] = v; num.value = v; rng.value = v; } };
+}
+
+// Pick-one button group
+function addSegmented(id, key, options, onChange) {
+  const el = document.getElementById(id);
+  options.forEach(([val, text]) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.classList.toggle('active', state[key] === val);
+    b.addEventListener('click', () => {
+      state[key] = val;
+      el.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      if (onChange) onChange(val);
+      update();
+      if (key === 'lidView' || key === 'lidStyle' || key === 'lidFit') fitView();
+    });
+    el.appendChild(b);
+  });
+}
+
+// Pick-any chips
+function addChips(id, obj, options) {
+  const el = document.getElementById(id);
+  options.forEach(([val, text]) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.classList.toggle('active', !!obj[val]);
+    b.addEventListener('click', () => { obj[val] = !obj[val]; b.classList.toggle('active', obj[val]); update(); });
+    el.appendChild(b);
+  });
+}
+function onCheck(id, key, refit) {
+  const el = document.getElementById(id);
+  el.checked = !!state[key];
+  el.addEventListener('change', e => { state[key] = e.target.checked; update(); if (refit) fitView(); });
+}
+
+addSegmented('modeSeg', 'mode', [['inner', 'Inner size'], ['outer', 'Outer size']]);
+addSlider('sizeFields', 'w', 'Width (X)', 5, 250, 0.5);
+addSlider('sizeFields', 'd', 'Depth (Y)', 5, 250, 0.5);
+addSlider('sizeFields', 'h', 'Height (Z)', 5, 250, 0.5);
+addSlider('sizeFields', 'radius', 'Corner radius', 0, 50, 0.5);
+
+addSlider('wallFields', 'wall', 'Wall thickness', 0.8, 6, 0.1);
+addSlider('wallFields', 'floor', 'Floor thickness', 0.6, 6, 0.1);
+onCheck('vaseChk', 'vase', true);
+addChips('edgeChips', state.edges, [['bottom', 'Bottom edge'], ['topOuter', 'Top outside'], ['topInner', 'Top inside'], ['scoop', 'Inside floor (scoop)']]);
+addSegmented('edgeStyleSeg', 'edgeStyle', [['fillet', 'Round'], ['chamfer', 'Bevel 45°']]);
+addSlider('edgeFields', 'edgeSize', 'Edge size', 0.2, 10, 0.1);
+
+addSegmented('stackSeg', 'stack', [['none', 'None'], ['nest', 'Nest (cups)'], ['lip', 'Lip (bricks)']]);
+addSlider('nestFields', 'taper', 'Taper per side', 0, 30, 0.5);
+addSlider('lipFields', 'foot', 'Foot height', 1, 20, 0.5);
+addSlider('lipFields', 'clear', 'Fit clearance', 0, 1, 0.05);
+
+onCheck('divChk', 'divOn', false);
+addSlider('divFields', 'divThick', 'Divider thickness', 0.6, 4, 0.1);
+addSlider('divFields', 'divDrop', 'Stop below rim', 0, 50, 0.5);
+
+onCheck('drainChk', 'drain', false);
+addSegmented('drainModeSeg', 'drainMode', [['one', 'One in the middle'], ['grid', 'Grid']]);
+addSlider('drainFields', 'drainD', 'Hole size', 1, 30, 0.5);
+addSlider('drainFields', 'drainCols', 'Holes across', 1, 20, 1, '');
+addSlider('drainFields', 'drainRows', 'Holes front to back', 1, 20, 1, '');
+
+onCheck('embossChk', 'emboss', false);
+addChips('faceChips', state.faces, [['bottom', 'Bottom'], ['floor', 'Floor'], ['front', 'Front'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right']]);
+addSlider('embossFields', 'textH', 'Letter height', 2, 20, 0.5);
+addSlider('embossFields', 'textDepth', 'Letter depth', 0.2, 2, 0.1);
+document.getElementById('labelText').addEventListener('input', e => { state.labelText = e.target.value; update(); });
+
+onCheck('lidChk', 'lid', true);
+// Switching fit type loads a sensible starting clearance
+addSegmented('lidFitSeg', 'lidFit', [['friction', 'Friction'], ['snap', 'Snap'], ['magnet', 'Magnets']],
+  v => { if (v !== 'magnet') sliders.lidClear.set(v === 'snap' ? 0.25 : 0.15); });
+addSegmented('lidStyleSeg', 'lidStyle', [['flat', 'Flat'], ['stack', 'Stackable']]);
+addSlider('lidFields', 'lidThick', 'Lid thickness', 0.8, 8, 0.1);
+addSlider('lidFields', 'plugDepth', 'Plug depth', 1, 20, 0.5);
+addSlider('lidFields', 'plugWall', 'Plug wall', 0.8, 4, 0.1);
+addSlider('lidFields', 'lidClear', 'Fit clearance', 0, 1, 0.05);
+addSlider('lidFields', 'rimDepth', 'Stack tray depth', 1, 20, 0.5);
+addSegmented('snapStyleSeg', 'snapStyle', [['sides', 'Bump on each side'], ['ring', 'All the way around']]);
+addSlider('snapFields', 'snapBump', 'Bump height', 0.2, 1.5, 0.05);
+addSlider('snapFields', 'bumpLen', 'Bump length', 3, 60, 0.5);
+addSlider('magFields', 'magD', 'Magnet diameter', 2, 25, 0.5);
+addSlider('magFields', 'magT', 'Magnet thickness', 1, 10, 0.5);
+addSlider('magFields', 'magFit', 'Hole extra (diameter)', 0, 0.6, 0.05);
+onCheck('tabChk', 'lidTab', false);
+addSlider('tabFields', 'tabW', 'Tab width', 5, 60, 0.5);
+addSlider('tabFields', 'tabL', 'Tab length', 2, 20, 0.5);
+onCheck('notchChk', 'notch', false);
+addSlider('notchFields', 'notchW', 'Notch width', 5, 60, 0.5);
+addSlider('notchFields', 'notchD', 'Notch depth', 1, 30, 0.5);
+addSegmented('lidViewSeg', 'lidView', [['beside', 'Beside (print position)'], ['on', 'On the box']]);
+
+onCheck('previewChk', 'preview', true);
+document.getElementById('cutChk').addEventListener('change', e => { state.cut = e.target.checked; requestRender(); });
+document.getElementById('colorPick').addEventListener('input', e => { state.color = e.target.value; requestRender(); });
+
+/* =====================================================================
+   DIVIDER EDITOR ("paint" the dividers)
+   A small top view of the inside of the box. Columns are vertical lines,
+   rows are horizontal lines. Drag a line to move it; click a piece of a
+   line to switch that piece off/on. Gaps between lines show in mm so you
+   can check that what you want to store will fit.
+   ===================================================================== */
+const ed = { cv: document.getElementById('divCanvas'), cand: null, drag: false, start: null, sel: null };
+
+function edGeom() {
+  const g = current;
+  if (!g) return null;
+  const Wi = 2 * (g.hw - g.t), Di = 2 * (g.hd - g.t), rI = Math.max(0, g.R(-g.t, 0));
+  const cw = ed.cv.clientWidth || 300, pad = 16;
+  const s = Math.min((cw - 2 * pad) / Wi, 240 / Di);
+  const H = Di * s + 2 * pad;
+  return { Wi, Di, rI, s, pad, H,
+    X: v => pad + v * s, Y: v => pad + (Di - v) * s,
+    toX: px => (px - pad) / s, toY: py => Di - (py - pad) / s };
+}
+const sortedXs = () => [...state.divXs].sort((a, b) => a - b);
+const sortedYs = () => [...state.divYs].sort((a, b) => a - b);
+function normalizeDivs() { state.divXs = sortedXs(); state.divYs = sortedYs(); }
+
+// Spaces between lines (minus divider thickness) along one direction
+function gaps(lines, total) {
+  const dt = state.divThick, B = [0, ...lines, total], out = [];
+  for (let k = 0; k < B.length - 1; k++) out.push(B[k + 1] - B[k] - (k > 0 ? dt / 2 : 0) - (k < B.length - 2 ? dt / 2 : 0));
+  return out;
+}
+
+function drawEditor() {
+  if (!state.divOn) return;
+  const G = edGeom();
+  if (!G) return;
+  const cv = ed.cv, dpr = window.devicePixelRatio || 1;
+  cv.style.height = G.H + 'px';
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(G.H * dpr);
+  const c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, cv.clientWidth, G.H);
+
+  // inside outline of the box (top)
+  const x0 = G.X(0), y0 = G.Y(G.Di), w = G.Wi * G.s, h = G.Di * G.s, r = Math.min(G.rI * G.s, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x0 + r, y0); c.arcTo(x0 + w, y0, x0 + w, y0 + h, r); c.arcTo(x0 + w, y0 + h, x0, y0 + h, r);
+  c.arcTo(x0, y0 + h, x0, y0, r); c.arcTo(x0, y0, x0 + w, y0, r); c.closePath();
+  c.fillStyle = '#f7f9fb'; c.fill(); c.strokeStyle = '#9aa5b1'; c.lineWidth = 2; c.stroke();
+  c.fillStyle = '#9aa5b1'; c.font = '10px system-ui, sans-serif'; c.textAlign = 'center';
+  c.fillText('front', x0 + w / 2, y0 + h + 12);
+
+  const xs = sortedXs(), ys = sortedYs(), lw = Math.max(2, state.divThick * G.s);
+  const drawLine = (axis, i, pos, bounds) => {
+    for (let k = 0; k < bounds.length - 1; k++) {
+      const off = state.divOff.has(axis + i + ':' + k);
+      const sel = ed.sel && ed.sel.axis === axis && ed.sel.i === i;
+      c.beginPath();
+      if (axis === 'c') { c.moveTo(G.X(pos), G.Y(bounds[k])); c.lineTo(G.X(pos), G.Y(bounds[k + 1])); }
+      else { c.moveTo(G.X(bounds[k]), G.Y(pos)); c.lineTo(G.X(bounds[k + 1]), G.Y(pos)); }
+      c.setLineDash(off ? [4, 4] : []);
+      c.lineWidth = off ? 1.5 : lw;
+      c.strokeStyle = off ? '#c3cbd3' : (sel ? '#1a73e8' : '#00a63e');
+      c.stroke();
+    }
+    c.setLineDash([]);
+  };
+  xs.forEach((x, i) => drawLine('c', i, x, [0, ...ys, G.Di]));
+  ys.forEach((y, j) => drawLine('r', j, y, [0, ...xs, G.Wi]));
+
+  // gap sizes along the top and left edges
+  c.fillStyle = '#4a5560'; c.font = '10px system-ui, sans-serif';
+  const gx = gaps(xs, G.Wi), Bx = [0, ...xs, G.Wi];
+  c.textAlign = 'center';
+  gx.forEach((v, k) => c.fillText(fmt(v), G.X((Bx[k] + Bx[k + 1]) / 2), G.Y(G.Di) - 4));
+  const gy = gaps(ys, G.Di), By = [0, ...ys, G.Di];
+  c.save(); c.textAlign = 'center';
+  gy.forEach((v, k) => { c.save(); c.translate(G.X(0) - 5, G.Y((By[k] + By[k + 1]) / 2)); c.rotate(-Math.PI / 2); c.fillText(fmt(v), 0, 0); c.restore(); });
+  c.restore();
+
+  document.getElementById('compInfo').textContent =
+    `Spaces left to right: ${gx.map(fmt).join(' · ')} mm. Front to back: ${gy.map(fmt).join(' · ')} mm.` +
+    (state.stack === 'nest' ? ' (Measured at the top; the bottom is smaller on tapered boxes.)' : '');
+  document.getElementById('delBtn').disabled = !ed.sel;
+}
+
+// Selected line: exact position box
+function renderSel() {
+  const box = document.getElementById('selBox');
+  if (!ed.sel) { box.innerHTML = ''; return; }
+  const { axis, i } = ed.sel, arr = axis === 'c' ? state.divXs : state.divYs;
+  box.innerHTML = `<div class="field"><div class="row"><label>${axis === 'c' ? 'Column' : 'Row'} ${i + 1}: from ${axis === 'c' ? 'left' : 'front'} wall</label>
+    <span class="num"><input type="number" id="selPos" step="0.5" min="0"><em>mm</em></span></div></div>`;
+  const inp = document.getElementById('selPos');
+  inp.value = fmt(arr[i]);
+  inp.addEventListener('input', () => {
+    const v = parseFloat(inp.value);
+    if (!isFinite(v)) return;
+    setLinePos(axis, i, v, true);
+    update();
+  });
+}
+function syncSelValue() {
+  const inp = document.getElementById('selPos');
+  if (inp && ed.sel && document.activeElement !== inp) {
+    const arr = ed.sel.axis === 'c' ? state.divXs : state.divYs;
+    inp.value = fmt(arr[ed.sel.i]);
+  }
+}
+// Move a line, keeping it between its neighbors so the order (and switched-off pieces) stay put
+function setLinePos(axis, i, v) {
+  const G = edGeom(); if (!G) return;
+  const arr = axis === 'c' ? state.divXs : state.divYs, total = axis === 'c' ? G.Wi : G.Di;
+  const gap = state.divThick + 1;
+  const lo = (i > 0 ? arr[i - 1] : 0) + gap, hi = (i < arr.length - 1 ? arr[i + 1] : total) - gap;
+  arr[i] = Math.max(lo, Math.min(hi, v));
+}
+
+function edHit(G, px, py) {
+  let best = null, bestD = 8;
+  const xs = sortedXs(), ys = sortedYs();
+  const inX = px >= G.X(0) - 4 && px <= G.X(G.Wi) + 4, inY = py >= G.Y(G.Di) - 4 && py <= G.Y(0) + 4;
+  if (inY) xs.forEach((x, i) => {
+    const d = Math.abs(px - G.X(x));
+    if (d < bestD) { const yv = G.toY(py); const B = [0, ...ys, G.Di]; let k = 0; while (k < B.length - 2 && yv > B[k + 1]) k++; best = { axis: 'c', i, k }; bestD = d; }
+  });
+  if (inX) ys.forEach((y, j) => {
+    const d = Math.abs(py - G.Y(y));
+    if (d < bestD) { const xv = G.toX(px); const B = [0, ...xs, G.Wi]; let k = 0; while (k < B.length - 2 && xv > B[k + 1]) k++; best = { axis: 'r', i: j, k }; bestD = d; }
+  });
+  return best;
+}
+const edLocal = e => { const r = ed.cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+ed.cv.addEventListener('pointerdown', e => {
+  const G = edGeom(); if (!G) return;
+  normalizeDivs();
+  const p = edLocal(e);
+  ed.cand = edHit(G, p.x, p.y); ed.start = p; ed.drag = false;
+  if (ed.cand) ed.cv.setPointerCapture(e.pointerId);
+  else { ed.sel = null; renderSel(); drawEditor(); }
+});
+ed.cv.addEventListener('pointermove', e => {
+  if (!ed.cand) return;
+  const G = edGeom(), p = edLocal(e);
+  if (!ed.drag && Math.hypot(p.x - ed.start.x, p.y - ed.start.y) > 3) {
+    ed.drag = true;
+    if (!ed.sel || ed.sel.axis !== ed.cand.axis || ed.sel.i !== ed.cand.i) { ed.sel = { axis: ed.cand.axis, i: ed.cand.i }; renderSel(); }
+  }
+  if (ed.drag) {
+    const v = Math.round((ed.cand.axis === 'c' ? G.toX(p.x) : G.toY(p.y)) * 2) / 2;   // snap to 0.5 mm
+    setLinePos(ed.cand.axis, ed.cand.i, v);
+    update();
+  }
+});
+ed.cv.addEventListener('pointerup', () => {
+  if (ed.cand && !ed.drag) {
+    // a click (no drag) toggles that piece of the line, and selects the line
+    const key = ed.cand.axis + ed.cand.i + ':' + ed.cand.k;
+    if (state.divOff.has(key)) state.divOff.delete(key); else state.divOff.add(key);
+    ed.sel = { axis: ed.cand.axis, i: ed.cand.i };
+    renderSel();
+    update();
+  }
+  ed.cand = null; ed.drag = false;
+});
+
+// Even spacing helper: n compartments -> n-1 line positions
+function evenLines(n, total) {
+  const dt = state.divThick, cw = (total - (n - 1) * dt) / n, out = [];
+  for (let k = 1; k < n; k++) out.push(Math.round((k * (cw + dt) - dt / 2) * 100) / 100);
+  return out;
+}
+function resetDivSel() { state.divOff.clear(); ed.sel = null; renderSel(); }
+function addLine(axis) {
+  const G = edGeom(); if (!G) return;
+  const arr = axis === 'c' ? sortedXs() : sortedYs(), total = axis === 'c' ? G.Wi : G.Di;
+  const B = [0, ...arr, total];
+  let k = 0;
+  for (let i = 1; i < B.length - 1; i++) if (B[i + 1] - B[i] > B[k + 1] - B[k]) k = i;
+  arr.push(Math.round((B[k] + B[k + 1]) / 2 * 2) / 2);
+  arr.sort((a, b) => a - b);
+  if (axis === 'c') state.divXs = arr; else state.divYs = arr;
+  resetDivSel(); update();
+}
+document.getElementById('addColBtn').addEventListener('click', () => addLine('c'));
+document.getElementById('addRowBtn').addEventListener('click', () => addLine('r'));
+document.getElementById('evenBtn').addEventListener('click', () => {
+  const G = edGeom(); if (!G) return;
+  state.divXs = evenLines(state.divXs.length + 1, G.Wi);
+  state.divYs = evenLines(state.divYs.length + 1, G.Di);
+  update();
+});
+document.getElementById('delBtn').addEventListener('click', () => {
+  if (!ed.sel) return;
+  normalizeDivs();
+  (ed.sel.axis === 'c' ? state.divXs : state.divYs).splice(ed.sel.i, 1);
+  resetDivSel(); update();
+});
+document.getElementById('clearDivBtn').addEventListener('click', () => { state.divXs = []; state.divYs = []; resetDivSel(); update(); });
+document.getElementById('divGridBtn').addEventListener('click', () => {
+  const G = edGeom(); if (!G) return;
+  const nc = Math.max(1, Math.round(+document.getElementById('divColsIn').value || 1));
+  const nr = Math.max(1, Math.round(+document.getElementById('divRowsIn').value || 1));
+  state.divXs = evenLines(nc, G.Wi); state.divYs = evenLines(nr, G.Di);
+  resetDivSel(); update();
+});
+// First time dividers are switched on, start with a 2 x 2 grid so there's something to drag
+document.getElementById('divChk').addEventListener('change', () => {
+  if (state.divOn && !state.divXs.length && !state.divYs.length) document.getElementById('divGridBtn').click();
+});
+window.addEventListener('resize', () => drawEditor());
+
+/* =====================================================================
+   UPDATE: runs on every change. Rebuilds the parts, refreshes the info
+   panel, and enables/disables export. If the settings are impossible,
+   it keeps showing the last good parts and blocks export.
+   ===================================================================== */
+let current = null, boxTrisAll = null, lidTrisAll = null, magTrisAll = null;
+const show = (el, on) => { (typeof el === 'string' ? document.getElementById(el) : el).style.display = on ? '' : 'none'; };
+const badge = (id, text) => { const el = document.getElementById(id); el.textContent = text || ''; show(el, !!text); };
+
+function update() {
+  // --- show/hide the controls that only apply to some choices ---
+  document.getElementById('modeHint').textContent = state.mode === 'inner'
+    ? 'Numbers are the usable space inside. Walls and floor get added around it.'
+    : 'Numbers are the outside footprint and total height.';
+  show('nestFields', state.stack === 'nest');
+  show('lipFields', state.stack === 'lip');
+  document.getElementById('stackHint').textContent = {
+    none: 'Plain box with straight walls.',
+    nest: 'Bottom is narrower so empty boxes nest like cups. Sizes are measured at the top. Corners stay round all the way down.',
+    lip: 'A stepped-in foot drops into the box below, so full boxes stack like bricks.'
+  }[state.stack];
+  show('edgeBox', Object.values(state.edges).some(Boolean));
+  show('divBox', state.divOn && !state.vase);
+  show('drainBox', state.drain && !state.vase);
+  show(sliders.drainCols.wrap, state.drainMode === 'grid');
+  show(sliders.drainRows.wrap, state.drainMode === 'grid');
+  show('embossBox', state.emboss);
+  document.getElementById('labelText').placeholder = autoLabel();
+  const lidOn = state.lid && !state.vase, mag = state.lidFit === 'magnet';
+  show('lidBox', lidOn);
+  show('lidExportWrap', lidOn);
+  show('lidStyleWrap', !mag);
+  show(sliders.plugDepth.wrap, !mag);
+  show(sliders.lidClear.wrap, !mag);
+  show(sliders.plugWall.wrap, !mag && state.lidStyle === 'flat');
+  show(sliders.rimDepth.wrap, !mag && state.lidStyle === 'stack');
+  show('snapBox', state.lidFit === 'snap');
+  show(sliders.bumpLen.wrap, state.snapStyle === 'sides');
+  show('magBox', mag);
+  show('tabFields', state.lidTab);
+  show('notchFields', state.notch);
+  document.getElementById('lidHint').textContent = mag
+    ? 'Magnets hold a flat lid in place. No plug, so the inside stays fully usable.'
+    : (state.lidFit === 'snap' ? 'A bump on the plug clicks into a groove inside the box. ' : 'A plug pushes into the box and holds by a snug fit. Less clearance = tighter. ') +
+      (state.lidStyle === 'flat' ? 'Flat lid prints plate-side down.' : 'Stackable lid has a tray on top for the next box and prints right side up.');
+  document.getElementById('snapHint').textContent = state.snapStyle === 'sides'
+    ? 'Short bumps in the middle of each side, where the plug flexes most. Easiest on and off.'
+    : 'A bump all the way around. Strongest hold, but stiff to open, especially on small boxes.';
+
+  // section badges so you can see what's on without opening each section
+  badge('bdgWalls', [state.vase ? 'Vase' : '', Object.values(state.edges).some(Boolean) ? 'Edges' : ''].filter(Boolean).join(', '));
+  badge('bdgStack', { none: '', nest: 'Nest', lip: 'Lip' }[state.stack]);
+  badge('bdgDiv', state.divOn && !state.vase ? `${state.divXs.length + 1} × ${state.divYs.length + 1}` : '');
+  badge('bdgDrain', state.drain && !state.vase ? (state.drainMode === 'one' ? '1 hole' : `${Math.round(state.drainCols) * Math.round(state.drainRows)} holes`) : '');
+  badge('bdgLabel', state.emboss ? 'On' : '');
+  badge('bdgLid', lidOn ? { friction: 'Friction', snap: 'Snap', magnet: 'Magnets' }[state.lidFit] : '');
+
+  // --- build ---
+  const g = computeGeometry(state);
+  let built = null;
+  if (!g.errs.length) {
+    built = buildBox(g, state, makeRaster(labelText()));
+    for (const [where, h] of built.labels) {
+      if (h === 0) g.warns.push(`No room for a label on the ${where.toLowerCase()} at this size.`);
+      else if (h < 3) g.warns.push(`${where} label is only ${fmt(h)} mm tall, may be hard to read. Shorter text helps.`);
+    }
+  }
+  const msgs = document.getElementById('msgs');
+  msgs.innerHTML = g.errs.map(m => `<div class="msg err">${m}</div>`).join('') +
+                   g.warns.map(m => `<div class="msg warn">${m}</div>`).join('');
+  const btns = ['exportBtn', 'exportLidBtn', 'exportMagBtn'].map(id => document.getElementById(id));
+  if (g.errs.length) { btns.forEach(b => b.disabled = true); requestRender(); return; }
+  btns.forEach(b => b.disabled = false);
+
+  const firstBuild = !current;
+  current = g;
+  boxTrisAll = built.shells.flat();
+  lidTrisAll = g.lid ? buildLid(g).flat() : null;
+  magTrisAll = g.lid && g.lid.fit === 'magnet' ? buildMagnetTest(state).flat() : null;
+  if (gl) {
+    freeMesh(meshes.box); freeMesh(meshes.lid); freeMesh(meshes.mag);
+    meshes.box = makeMesh(boxTrisAll);
+    meshes.lid = lidTrisAll ? makeMesh(lidTrisAll) : null;
+    meshes.mag = magTrisAll ? makeMesh(magTrisAll) : null;
+  }
+
+  // --- info panel ---
+  const vol = meshVolume(boxTrisAll) / 1000; // cm^3
+  const rows = [
+    ['Outer size', `${fmt(g.hw * 2)} × ${fmt(g.hd * 2)} × ${fmt(g.Ho)}`],
+    g.vase ? ['Inside', 'solid (vase mode)'] : ['Inner size', `${fmt(g.hw * 2 - 2 * g.t)} × ${fmt(g.hd * 2 - 2 * g.t)} × ${fmt(g.Ho - g.f)}`],
+    ['Corner radius out / in', `${fmt(Math.max(g.rO, 0))} / ${fmt(Math.max(g.rO - g.t, 0))}`]
+  ];
+  if (state.stack === 'nest') {
+    const bo = g.outer[0][1];
+    rows.push(['Bottom outer', `${fmt(g.hw * 2 + 2 * bo)} × ${fmt(g.hd * 2 + 2 * bo)}`]);
+    rows.push(['Wall angle', `${fmt(g.extra.angle)}°`]);
+    if (g.pitch) rows.push(['Each nested box adds', `${fmt(g.pitch)} mm`]);
+  }
+  if (state.stack === 'lip') {
+    const s = g.outer[0][1];
+    rows.push(['Foot size', `${fmt(g.hw * 2 + 2 * s)} × ${fmt(g.hd * 2 + 2 * s)}`]);
+    rows.push(['Each stacked box adds', `${fmt(g.pitch)} mm`]);
+    rows.push(['Usable height when stacked', `${fmt(g.pitch - g.f)} mm`]);
+  }
+  if (state.divOn && !g.vase) rows.push(['Divider height', `${fmt(g.divTop - g.f)} mm`]);
+  if (g.holes) rows.push(['Drain holes', `${g.holes.n} × Ø${fmt(g.holes.D)} mm`]);
+  if (state.emboss) {
+    const shown = built.labels.filter(l => l[1] > 0).map(l => `${l[0]} ${fmt(l[1])}`);
+    if (shown.length) rows.push(['Label height (mm)', shown.join(', ')]);
+  }
+  rows.push(['Box plastic', `≈ ${fmt(vol)} cm³ / ${fmt(vol * 1.24)} g PLA`]);
+  if (g.lid) {
+    const L = g.lid, lv = meshVolume(lidTrisAll) / 1000;
+    const grow = L.style === 'stack' ? L.to : 0;
+    const lidH = L.fit === 'magnet' ? L.lt : (L.style === 'stack' ? L.zTop : L.lt + L.P);
+    rows.push(['sep']);
+    rows.push(['Lid size', `${fmt((g.hw + grow) * 2)} × ${fmt((g.hd + grow) * 2)} × ${fmt(lidH)}`]);
+    rows.push(['Closed height', `${fmt(L.style === 'stack' ? L.seat + L.zTop : g.Ho + L.lt)} mm`]);
+    if (L.style === 'stack') rows.push(['Each box + lid adds', `${fmt(L.seat + L.zc)} mm`]);
+    if (L.b) rows.push(['Snap grip (bump minus gap)', `${fmt(Math.max(0, L.b - L.c))} mm`]);
+    if (L.fit === 'magnet') {
+      rows.push(['Magnet holes', `Ø${fmt(L.rh * 2)} × ${fmt(L.md)} deep`]);
+      rows.push(['Test piece holes', [-0.1, 0, 0.1].map(k => 'Ø' + fmt(state.magD + Math.max(0, state.magFit + k))).join(' / ')]);
+    }
+    rows.push(['Lid plastic', `≈ ${fmt(lv)} cm³ / ${fmt(lv * 1.24)} g PLA`]);
+  }
+  rows.push(['Triangles', (boxTrisAll.length + (lidTrisAll ? lidTrisAll.length : 0)).toLocaleString()]);
+  document.getElementById('info').innerHTML = rows.map(([a, b]) =>
+    a === 'sep' ? '<div class="sep"></div>' : `<div><span>${a}</span><span>${b}</span></div>`).join('');
+  document.getElementById('fileName').textContent = fileBase() + '.stl';
+  document.getElementById('lidFileName').textContent = fileBase() + '_lid.stl';
+  document.getElementById('magFileName').textContent = `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`;
+
+  drawEditor();
+  syncSelValue();
+  if (firstBuild) fitView();
+  requestRender();
+}
+
+document.getElementById('exportBtn').addEventListener('click', () => { if (boxTrisAll) download(boxTrisAll, fileBase() + '.stl'); });
+document.getElementById('exportLidBtn').addEventListener('click', () => { if (lidTrisAll) download(lidTrisAll, fileBase() + '_lid.stl'); });
+document.getElementById('exportMagBtn').addEventListener('click', () => {
+  if (magTrisAll) download(magTrisAll, `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`);
+});
+
+/* ===== Start up ===== */
+if (!gl) {
+  document.getElementById('viewWrap').innerHTML =
+    '<p style="padding:20px">Your browser has 3D (WebGL) turned off, so the preview can\'t show. Export still works.</p>';
+  update();
+} else {
+  initGL();
+  new ResizeObserver(() => requestRender()).observe(canvas);
+  update();
+}
+// The divider editor only has a size once its section is opened, so redraw then
+document.querySelectorAll('details.sec').forEach(d => d.addEventListener('toggle', () => drawEditor()));
+</script>
+</body>
+</html>
