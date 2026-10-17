@@ -148,6 +148,9 @@
   #info span:first-child { color: var(--muted); }
   #info span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   #msgs { max-height: 150px; overflow-y: auto; }
+  .tipBox { background: #eef6ff; color: #1d3f66; border: 1px solid #cfe2f7; border-radius: 8px; padding: 9px 11px; font-size: 12.5px; line-height: 1.45; margin-top: 8px; }
+  .tipBox b { color: #12304f; }
+  .tipBox ul { margin: 4px 0 0; padding-left: 18px; }
   .msg { border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 8px; }
   .msg.warn { background: var(--warn-bg); color: var(--warn); }
   .msg.err { background: var(--err-bg); color: var(--err); }
@@ -254,6 +257,7 @@
         <div class="sublabel">Shape</div>
         <div class="seg" id="shapeSeg"></div>
         <p class="hint" id="vaseHint">Solid makes a filled block. Turn on spiral vase in your slicer and it prints one wall. Dividers, lid, drain holes and floor label turn off.</p>
+        <div class="tipBox" id="vaseTips"></div>
         <div class="sublabel">Round or bevel edges</div>
         <div class="chips" id="edgeChips"></div>
         <div id="edgeBox">
@@ -358,7 +362,7 @@
           <div id="magBox">
             <div class="sublabel">Magnets</div>
             <div id="magFields"></div>
-            <p class="hint">Holes go in posts in the 4 inside corners of the box and in the lid. Print the test piece first to dial in the fit.</p>
+            <p class="hint">Holes go in short posts in the 4 inside corners of the box and in the corners of the lid's plug. Print the test piece first to dial in the fit.</p>
             <button class="exportBtn secondary" id="exportMagBtn"><svg><use href="#i-download"/></svg>Export magnet test STL</button>
             <div class="fileName" id="magFileName"></div>
           </div>
@@ -405,7 +409,7 @@
       </div>
       <div class="fileName" id="exportSummary"></div>
       <!-- Version lives here, small and out of the way -->
-      <div id="version">v2026.10.17.08</div>
+      <div id="version">v2026.10.17.17</div>
     </div>
   </div>
 
@@ -643,6 +647,31 @@ function insideRR(x, y, hw, hd, r) {
   return dx * dx + dy * dy <= r * r;
 }
 
+// Overlap of two convex outlines (both counter-clockwise)
+function clipConvex(subject, clip) {
+  let out = subject;
+  for (let i = 0; i < clip.length && out.length; i++) {
+    const P = clip[i], Q = clip[(i + 1) % clip.length];
+    const side = q => (Q[0] - P[0]) * (q[1] - P[1]) - (Q[1] - P[1]) * (q[0] - P[0]);   // > 0 = inside
+    const inp = out; out = [];
+    for (let j = 0; j < inp.length; j++) {
+      const A = inp[j], B = inp[(j + 1) % inp.length], da = side(A), db = side(B);
+      if (da >= 0) out.push(A);
+      if ((da >= 0) !== (db >= 0)) { const k = da / (da - db); out.push([A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k]); }
+    }
+  }
+  return out.filter((q, i) => { const n = out[(i + 1) % out.length]; return Math.hypot(q[0] - n[0], q[1] - n[1]) > 1e-6; });
+}
+
+// Magnet corner block outline: the corner of 'room' (an outline that hugs the wall)
+// cut back to a rounded shape around the magnet at c. The inner corner is an arc
+// of radius Rb around the magnet, so the plastic around the hole is even and the
+// corner facing the middle of the box is round, not sharp.
+function magnetBlock(room, c, sx, sy, Rb) {
+  const H = 200, sq = roundedRing(H, H, Rb, 0).map(q => [q[0] + c[0] + sx * (H - Rb), q[1] + c[1] + sy * (H - Rb)]);
+  return clipConvex(room, sq);
+}
+
 // Where a ray from point c at angle a leaves a convex outline
 function rayConvex(poly, c, a) {
   const dx = Math.cos(a), dy = Math.sin(a);
@@ -737,15 +766,73 @@ function edgeSamples(E) {
 
 // Turn the user's settings into the numbers the mesh builders need,
 // plus any errors (can't build) and warnings (can build, but heads up).
+// Twist lock sizes along the height, shared by the twist geometry and the
+// inner-height math: solid lip above the slots, slot depth / lug size,
+// flat part of each slot, and how far the plug tip goes below the lugs.
+const TW_DIMS = { lip: 1.2, sd: 1.5, hc: 2, tip: 0.5 };
+const twistPlugDepth = () => TW_DIMS.lip + TW_DIMS.sd + TW_DIMS.hc + TW_DIMS.sd + TW_DIMS.tip;
+
+// How far the lid reaches down into the box, measured from the box top.
+// In inner size mode the box gets this much taller, so the height you typed
+// is the clear space left UNDER the lid, not just up to the rim.
+//   friction / snap, flat:      the plug hangs down plugDepth
+//   friction / snap, stackable: the lid sinks in, plug bottom is plugDepth + clearance down
+//   twist:                      the round plug with the lugs (fixed size)
+//   magnets:                    locating plug, like the flat friction lid
+function lidDrop(p) {
+  if (!p.lid || p.vase) return 0;
+  if (p.lidFit === 'magnet') return Math.max(p.plugDepth, p.magT + 1);   // locating plug (at least deep enough for the magnets)
+  if (p.lidFit === 'twist') return twistPlugDepth();
+  return p.plugDepth + (p.lidStyle === 'stack' ? p.lidClear : 0);
+}
+
+// Vase mode: the slicer prints one wide line as the wall plus a few solid bottom
+// layers (see the slicer tips under the Solid button). Inside (ID) sizing uses
+// these, so the space inside the printed vase is exactly what was typed.
+const VASE_LINE = 0.95;   // line width we tell people to use with a 0.4 nozzle
+// Bottom layers: enough to cover a label cut into the bottom (its depth in 0.2 mm
+// layers) plus 2 solid layers, or 3 with no bottom label
+const vaseBottomLayers = p => (p.emboss && p.faces.bottom) ? Math.ceil(p.textDepth / 0.2 - 1e-9) + 2 : 3;
+
+// How tall and how much wider the closed box + lid is than the box alone.
+// (A stackable lid's tray wraps around the outside, so it's wider than the box.
+// Pull tabs stick out sideways and are left out on purpose: you can see them,
+// and the finger notch is there if you'd rather not have one.)
+function lidOutside(g) {
+  const L = g.lid;
+  if (!L) return { up: 0, grow: 0 };
+  const closed = L.style === 'stack' ? L.seat + L.zTop : g.Ho + L.lt;
+  return { up: closed - g.Ho, grow: L.style === 'stack' ? Math.max(0, L.to) : 0 };
+}
+
+// Outside (OD) mode with a lid: the size you type is the whole closed box,
+// lid included, so it fits the space you measured. Build it once to see how
+// much the lid adds, then shrink the box by that and build again. (Twice more,
+// since the lid's size can shift a hair when the box changes, e.g. nesting tapers.)
 function computeGeometry(p) {
+  let g = computeGeometryCore(p);
+  if (p.mode !== 'outer' || !g.lid) return g;
+  for (let i = 0; i < 3; i++) {
+    const a = lidOutside(g);
+    g = computeGeometryCore(p, a);
+  }
+  g.lidAdj = lidOutside(g);
+  return g;
+}
+
+function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
   const errs = [], warns = [];
   const t = p.wall, f = p.floor, vase = !!p.vase;
   let hw, hd, rO, Ho;
 
-  // Inner mode: user numbers are the inside, so add the walls/floor around them.
+  // Inner mode: user numbers are the inside, so add the walls/floor around them,
+  // plus the room the lid takes up so the full height is still free with the lid on.
   // Outer mode: user numbers are the outside footprint and total height.
-  if (p.mode === 'inner') { hw = p.w / 2 + t; hd = p.d / 2 + t; rO = p.radius + t; Ho = p.h + f; }
-  else                    { hw = p.w / 2;     hd = p.d / 2;     rO = p.radius;     Ho = p.h; }
+  const drop = p.mode === 'inner' ? lidDrop(p) : 0;
+  // (vase mode: the slicer's wall line and bottom layers instead of Wall/Floor thickness)
+  const tv = vase ? VASE_LINE : t, fv = vase ? vaseBottomLayers(p) * 0.2 : f;
+  if (p.mode === 'inner') { hw = p.w / 2 + tv; hd = p.d / 2 + tv; rO = p.radius + tv; Ho = p.h + fv + drop; }
+  else                    { hw = p.w / 2 - adj.grow; hd = p.d / 2 - adj.grow; rO = Math.max(0, p.radius - adj.grow); Ho = p.h - adj.up; }
   rO = Math.min(rO, Math.min(hw, hd));
 
   if (!(t > 0)) errs.push('Wall thickness must be more than 0.');
@@ -777,7 +864,7 @@ function computeGeometry(p) {
   const minInset = Math.min(...outer.map(o => o[1]));
   if (Math.min(hw, hd) + minInset - t < 1) errs.push('Walls/taper/foot leave no room inside at this size.');
 
-  const g = { errs, warns, hw, hd, rO, t, f, Ho, outer, pitch, extra, footTop, stack: p.stack, vase };
+  const g = { errs, warns, hw, hd, rO, t, f, Ho, drop, outer, pitch, extra, footTop, stack: p.stack, vase };
   g.o = z => insetAt(outer, z);
 
   // Corner radius rule. Nesting boxes keep the SAME radius top to bottom so a
@@ -834,17 +921,33 @@ function computeGeometry(p) {
     const ltWanted = L.lt;
 
     if (L.fit === 'magnet') {
-      // Magnets: no plug. Posts in the 4 inside corners of the box hold magnets at
-      // rim height, and the lid has matching pockets on its underside.
+      // Magnets + locating lip. The lid has a plug like the friction lid (loose fit),
+      // so it can't slide around, and the magnets just hold it down.
+      //   lid: a solid block in each corner of the plug, magnet pocket in its tip
+      //   box: a short post in each corner right under those blocks, magnet pocket on
+      //        top, and a 45° chamfer under it down into the wall instead of a full
+      //        post to the floor, so you get the space underneath back.
       L.rh = (p.magD + p.magFit) / 2;
       L.md = p.magT + 0.2;                   // a hair deeper than the magnet so it sits just below the surface
-      L.lt = Math.max(L.lt, L.md + 0.8 + L.eTop);   // lid must be thick enough to hold the magnet (and a cut-in label)
-      if (L.lt > ltWanted + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the magnets.`);
-      const rI = Math.max(0, g.R(-t, 0));
-      L.P2 = Math.max(L.rh + 1.2, rI + 0.05);       // half-size of each corner post
-      L.mc = [hw - t - L.P2, hd - t - L.P2];         // pocket center (top right corner; others mirror)
-      if (Math.min(hw, hd) + minInset - t < 2 * L.P2 + 2) errs.push('Box is too small inside for magnet posts.');
-      if (Ho - f < L.md + 2) errs.push('Box is too short for magnet posts.');
+      if (L.eTop) L.lt = Math.max(L.lt, L.eTop + 0.8);   // a cut-in lid label needs solid lid under it
+      if (L.lt > ltWanted + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the lid label.`);
+      if (L.P < L.md + 0.8) { L.P = L.md + 0.8; warns.push(`Plug made ${fmt(L.P)} mm deep so the magnets fit in its corners.`); }
+      L.gap = Math.max(0.2, L.c);            // space between the lid and box magnets when closed
+      L.zPost = Ho - L.P - L.gap;            // top of the box posts
+      // Where the magnet goes: tucked into the corner as far as it can, but fully
+      // inside the lid plug's wall (so the plug wall never cuts into the hole). That
+      // leaves a full plug wall of plastic between the hole and the outside.
+      // Round corners push it further in.
+      const oP = g.o(L.zPost), rI = Math.max(0, g.R(-t, oP));
+      const e = L.c + L.pw + 0.05, rIn = Math.max(0, rI - e), Rm = L.rh + 0.2;   // inside face of the plug wall
+      L.d = e + (rIn >= Rm ? rIn - (rIn - Rm) / Math.SQRT2 : Rm);   // magnet center, in from each inside wall of the box
+      L.Rb = L.rh + 1.2;                                   // rounded block around the magnet (1.2 mm wall)
+      L.mc = [hw + oP - t - L.d, hd + oP - t - L.d];       // magnet center (top right corner; others mirror)
+      L.lead = Math.max(0, Math.min(1, L.pw - 0.4));     // 45° lead-in on the plug tip (bigger than friction lids: it only locates, so it should find the opening easily)
+      L.bead = () => 0;
+      if (Math.min(hw, hd) + minInset - t < L.d + L.Rb + 1) errs.push('Box is too small inside for magnet posts.');
+      if (L.zPost - L.md - 1 < f) errs.push('Box is too short for magnets under the lid plug.');
+      if (Math.min(hw, hd) + g.o(Ho - L.P) - t - L.c - L.pw < 1) errs.push('Plug walls leave no room inside the lid.');
       if (p.stack === 'nest') warns.push('Magnet posts in the corners stop boxes nesting.');
     } else if (L.fit === 'twist') {
       // Tray insert (stackable twist lid only). A lid-top label then goes on the insert,
@@ -861,12 +964,12 @@ function computeGeometry(p) {
       // ramp down a little at the end to pull the lid down tight.
       if (L.eTop || L.eUnder) L.lt = Math.max(L.lt, L.eTop + L.eUnder + 0.8);
       if (L.lt > ltWanted + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the lid label.`);
-      const sd = 1.5, c = L.c, deg = Math.PI / 180;          // sd = how deep the slots cut / how far lugs stick out
+      const sd = TW_DIMS.sd, c = L.c, deg = Math.PI / 180;          // sd = how deep the slots cut / how far lugs stick out
       const Rn = Math.min(hw, hd) + g.o(Ho) - t - sd - 1;     // round opening radius (leaves wall + 1 mm behind the slots)
-      const ramp = p.twistLock, hc = 2;                        // hc = height of the flat part of each slot
-      const zt = Ho - 1.2 - sd, zb = zt - hc;                  // slot band (1.2 mm of solid lip above it)
+      const ramp = p.twistLock, hc = TW_DIMS.hc;                       // hc = height of the flat part of each slot
+      const zt = Ho - TW_DIMS.lip - sd, zb = zt - hc;                 // slot band (1.2 mm of solid lip above it)
       const zn0 = zb - ramp - sd - 1;                          // bottom of the round neck
-      const zP0 = zb - sd - 0.5;                               // bottom of the lid plug
+      const zP0 = zb - sd - TW_DIMS.tip;                              // bottom of the lid plug
       const N = Rn >= 14 ? 3 : 2, phi = 30 * deg;              // lugs, and how far you turn
       const beta = Math.min(30 * deg, 9 / Math.max(Rn, 1));    // lug width (about 9 mm)
       const delta = (c + 0.2) / Math.max(Rn, 1);               // side gap around each lug
@@ -1035,7 +1138,7 @@ function computeGeometry(p) {
   g.divTop = Ho;
   if (p.divOn && !vase) {
     let auto = 0;
-    if (g.lid && g.lid.fit !== 'magnet') auto = g.lid.P + g.lid.c + 0.5;   // stay below the lid plug
+    if (g.lid) auto = g.lid.P + g.lid.c + 0.5;   // stay below the lid plug
     if (p.stack === 'lip') auto = Math.max(auto, p.foot + p.clear + 0.5);   // stay below the next box's foot
     if (g.notch) auto = Math.max(auto, g.notch.d + 0.5);                    // don't poke up through the finger notch
     if (g.lid && g.lid.fit === 'magnet' && g.lid.lblUnder) auto = Math.max(auto, p.textDepth + 0.3);   // clear raised lid text
@@ -1142,21 +1245,37 @@ function buildBox(g, p, raster) {
   return { shells, labels };
 }
 
-// One corner post that holds a magnet at rim height. It hugs the rounded inside
-// corner (same curve, tucked into the wall) and leans with tapered walls.
+// One corner post that holds a magnet just under the lid plug. The top is a block
+// that hugs the rounded inside corner (same curve, tucked into the wall), deep
+// enough for the magnet plus 1 mm under it. Below that, a 45° chamfer cuts it
+// back diagonally into the corner, so it prints without supports and doesn't
+// fill the corner all the way down to the floor.
 function postShell(g, sx, sy) {
-  const L = g.lid, t = g.t, P2 = L.P2, ov = t / 2, z0 = g.f - 0.1;
-  const zs = uniq([z0, g.Ho, ...g.outer.map(q => q[0]).filter(z => z > z0 && z < g.Ho)]);
-  const center = z => { const o = g.o(z); return [sx * (g.hw + o - t - P2), sy * (g.hd + o - t - P2)]; };
-  const A = [...Array(48)].map((_, i) => 2 * Math.PI * i / 48);
-  const ringAt = z => {
-    const o = g.o(z), c = center(z), r = g.R(-t, o) + ov;
-    const poly = roundedRing(P2 + ov, P2 + ov, r, 0).map(q => [q[0] + c[0], q[1] + c[1]]);
-    return A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], z]; });
+  const L = g.lid, t = g.t, ov = t / 2;
+  const zT = L.zPost, zB = zT - L.md - 1, zFloor = g.f - 0.1;
+  const center = z => { const o = g.o(z); return [sx * (g.hw + o - t - L.d), sy * (g.hd + o - t - L.d)]; };
+  const block = z => {
+    const o = g.o(z), room = roundedRing(g.hw + o - t + ov, g.hd + o - t + ov, g.R(-t, o) + ov, 0).map(q => [q[0], q[1]]);
+    return magnetBlock(room, center(z), sx, sy, L.Rb);
   };
-  const cT = center(g.Ho), c0 = center(z0);
+  // Chamfer: a flat 45° face cut diagonally across the corner. Seen from above,
+  // s = sx*x + sy*y grows toward the corner; the face drops 1 mm for every mm
+  // it moves toward the corner (√2 in s per mm of height). It starts just past the
+  // post's inner edge and ends at the inside face of the wall, so everything below
+  // the face is either open box or buried in the wall. Short boxes: stops at the floor.
+  const A = [...Array(48)].map((_, i) => 2 * Math.PI * i / 48);
+  const ringAt = z => { const c = center(z), poly = block(z); return A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], z]; }); };
+  const top = ringAt(zB), cB = center(zB);
+  const k0 = Math.min(...top.map(q => sx * q[0] + sy * q[1])) - 0.2;   // just past the post's inner edge
+  const zCut = (x, y) => Math.max(zFloor, zB - (sx * x + sy * y - k0) / Math.SQRT2);
+  const rings = [top.map(q => [q[0], q[1], zCut(q[0], q[1])]), top];
+  const bottom = [cB[0], cB[1], zCut(cB[0], cB[1])];
+  // Block: slices from the chamfer top up to the post top (more where a tapered wall bends)
+  const zs = uniq([zB, zT, ...g.outer.map(q => q[0]).filter(z => z > zB && z < zT)]).filter(z => z > zB + 1e-6);
+  for (const z of zs) rings.push(ringAt(z));
+  const cT = center(zT);
   const hole = z => A.map(a => [cT[0] + L.rh * Math.cos(a), cT[1] + L.rh * Math.sin(a), z]);
-  return stitch([{ c: [c0[0], c0[1], z0] }, ...zs.map(ringAt), hole(g.Ho), hole(g.Ho - L.md), { c: [cT[0], cT[1], g.Ho - L.md] }]);
+  return stitch([{ c: bottom }, ...rings, hole(zT), hole(zT - L.md), { c: [cT[0], cT[1], zT - L.md] }]);
 }
 
 // Divider walls. Each line (column or row) is split into pieces between the
@@ -1396,28 +1515,38 @@ function buildLid(g, p, raster) {
       if (L.insert) insert = buildInsert(g, p, L, raster, labels);
     }
   } else if (L.fit === 'magnet') {
-    // Magnet lid: plate with 4 pockets on its underside (printed facing up, so no bridges)
-    const zp = L.lt - L.md, z0 = zp - 0.05, eT = L.eTop;
-    shells.push(stitch([{ c: [0, 0, eT] }, ...bedEdge(zp - 0.2 - eT, eT), ring(zp, 0, 0), { c: [0, 0, zp] }]));
-    flatTopLabel(zp - 0.2 - eT);
+    // Magnet lid: the flat friction lid's plate and plug (a loose locating lip, no bumps),
+    // plus a solid block in each corner of the plug with a magnet pocket in its tip.
+    // Printed plate down, so the pockets face up and need no bridges.
+    const taper = dd => g.o(g.Ho - dd), eT = L.eTop;
+    let ds = [0, L.P - L.lead, L.P];
+    for (const [z] of g.outer) { const dd = g.Ho - z; if (dd > 0 && dd < L.P) ds.push(dd); }
+    ds = uniq(ds.filter(dd => dd >= 0 && dd <= L.P));
+    const lead = dd => dd > L.P - L.lead ? dd - (L.P - L.lead) : 0;
+    const list = [{ c: [0, 0, eT] }, ...bedEdge(L.lt - 0.3 - eT, eT), ring(L.lt, 0, 0)];
+    for (const dd of ds) list.push(ring(L.lt + dd, taper(dd), -t - L.c - lead(dd)));
+    for (const dd of [...ds].reverse()) list.push(ring(L.lt + dd, taper(dd), -t - L.c - L.pw));
+    list.push({ c: [0, 0, L.lt] });
+    shells.push(stitch(list));
+    flatTopLabel(L.lt - 0.3 - eT);
+    // Corner blocks, cut from the plug's outline at its tip (the narrowest spot on a tapered box),
+    // pulled in past the lead-in chamfer so the chamfer runs unbroken all the way around
+    const zTip = L.lt + L.P, oT = taper(L.P), m = t + L.c + L.lead + 0.05;
+    const outline = roundedRing(g.hw + oT - m, g.hd + oT - m, g.R(-m, oT), 0).map(q => [q[0], q[1]]);
+    const [cx, cy] = L.mc, X0 = cx - L.Rb, Y0 = cy - L.Rb;
+    for (const sx of [1, -1]) for (const sy of [1, -1]) {
+      const poly = magnetBlock(outline, [sx * cx, sy * cy], sx, sy, L.Rb);
+      shells.push(convexPrism([], poly, L.lt - 0.05, zTip - L.md));                               // solid part
+      shells.push(holedCell(poly, [sx * cx, sy * cy], L.rh, zTip - L.md - 0.05, zTip, 'through'));  // pocket
+    }
     if (L.lblUnder) {
-      // Raised text on the underside, kept between the corner posts so it can't hit them
-      const ov = t / 2, gapX = L.mc[0] - L.P2 - ov - 0.5, gapY = L.mc[1] - L.P2 - ov - 0.5;
-      const A = gapY > 0.5 ? raster(2 * (g.hw - t - 1), 2 * gapY, 0) : null;   // band across the middle
-      const B = gapX > 1 ? raster(2 * gapX, 2 * (g.hd - t - 1), 0) : null;     // band front to back
+      // Raised text on the underside, inside the plug and kept between the corner blocks
+      const ov = 0.5, gapX = X0 - ov, gapY = Y0 - ov, inX = g.hw + oT - t - L.c - L.pw - 1.5, inY = g.hd + oT - t - L.c - L.pw - 1.5;
+      const A = gapY > 0.5 && inX > 1 ? raster(2 * inX, 2 * gapY, 0) : null;   // band across the middle
+      const B = gapX > 1 && inY > 1 ? raster(2 * gapX, 2 * inY, 0) : null;     // band front to back
       const ras = A && (!B || A.hMm >= B.hMm) ? A : B;
       labels.push(['Lid underside', raiseFace(shells, ras, L.lt, p.textDepth, mapPlain)]);
     }
-    const outline = roundedRing(g.hw, g.hd, g.rO, 0).map(q => [q[0], q[1]]);
-    const [cx, cy] = L.mc, X0 = cx - L.rh - 1.5, Y0 = cy - L.rh - 1.5;
-    for (const sx of [1, -1]) for (const sy of [1, -1]) {
-      const poly = clipPoly(clipPoly(outline, 0, sx * X0, sx > 0), 1, sy * Y0, sy > 0);
-      shells.push(holedCell(poly, [sx * cx, sy * cy], L.rh, z0, L.lt, 'through'));
-    }
-    const mid = clipPoly(clipPoly(outline, 1, Y0, false), 1, -Y0, true);
-    const topB = clipPoly(clipPoly(clipPoly(outline, 1, Y0, true), 0, X0, false), 0, -X0, true);
-    const botB = clipPoly(clipPoly(clipPoly(outline, 1, -Y0, false), 0, X0, false), 0, -X0, true);
-    for (const pc of [mid, topB, botB]) if (pc.length >= 3) shells.push(convexPrism([], pc, z0, L.lt));
   } else if (L.style === 'flat') {
     // Flat lid, printed plate-down with the plug pointing up. It's basically a very
     // shallow box: plate = floor, plug = walls, plus a lip that rests on the box rim.
@@ -1740,7 +1869,10 @@ function makeRaster(lines, fontKey, textH) {
     return ras;
   };
 }
-function autoLabel() { return `${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)} ${state.mode === 'inner' ? 'IN' : 'OUT'}`; }
+// Size label: the numbers you typed plus ID (inside dimensions) or OD (outside
+// dimensions). ID/OD instead of IN/OUT because "IN" reads like inches. No "mm",
+// it's assumed for 3D prints and keeps the label short.
+function autoLabel() { return `${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)} ${state.mode === 'inner' ? 'ID' : 'OD'}`; }
 // The label's lines: line 1 is the size, or your text in Custom mode; line 2 is optional
 function labelLines() {
   const l1 = state.labelMode === 'custom' && state.labelText.trim() ? state.labelText.trim() : autoLabel();
@@ -1921,6 +2053,29 @@ function initGL() {
    Expect it to be within about 10-15% of what the slicer says. */
 const PLA_DENSITY = 1.24, FILL_FACTOR = 0.94, SEC_PER_CM3 = 81.6, PREP_S = 421;
 const estGrams = v => v * PLA_DENSITY * FILL_FACTOR;
+/* Vase mode is different: the slicer prints one wide wall plus a few solid
+   bottom layers, not the solid block in the STL. So we measure the outside
+   wall area and the bottom area of the block and turn those into plastic.
+   Tuned against Bambu Studio (P2S, 0.95 mm lines, 0.20 mm layers, 5 bottom
+   layers, 50 mm ID box): 14.9 g, 21.8 min printing. */
+const VASE_PACK = 0.9325, VASE_FLOW = 9.08;   // fudge factor, mm³ per second
+function vaseExtruded(tris, bottomMm) {
+  let side = 0, bottom = 0;
+  for (const [a, b, c] of tris) {
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const area = Math.hypot(nx, ny, nz) / 2;
+    if (!area) continue;
+    const k = nz / (2 * area);   // how much the face points up or down
+    // walls (slopes count too). Skip little walls that sit inside the bottom layers,
+    // like the sides of letters cut into the bottom: the bottom layers fill those anyway.
+    if (Math.abs(k) < 0.7) { if (Math.max(a[2], b[2], c[2]) > bottomMm) side += area; }
+    else if (k < 0 && Math.min(a[2], b[2], c[2]) < 0.01) bottom += area;   // face sitting on the plate
+  }
+  return (side * VASE_LINE + bottom * bottomMm) * VASE_PACK / 1000;   // cm³ actually extruded
+}
+const vaseGrams = v => v * 1.26;                       // Bambu's PLA density
+const vaseSeconds = v => v * 1000 / VASE_FLOW;
 const estSeconds = v => v * SEC_PER_CM3;
 function fmtTime(s) {
   const m = Math.round(s / 60);
@@ -2311,7 +2466,7 @@ function syncDerived() {
   state.cut = state.cutSel === 'on';
 }
 
-addSegmented('modeSeg', 'mode', [['inner', 'Inner size'], ['outer', 'Outer size']]);
+addSegmented('modeSeg', 'mode', [['inner', 'Inside (ID)'], ['outer', 'Outside (OD)']]);
 addSlider('sizeFields', 'w', 'Width (X)', 5, 250, 0.5);
 addSlider('sizeFields', 'd', 'Depth (Y)', 5, 250, 0.5);
 addSlider('sizeFields', 'h', 'Height (Z)', 5, 250, 0.5);
@@ -2353,7 +2508,7 @@ document.getElementById('labelLine2').addEventListener('input', e => { state.lab
 
 // Switching fit type loads a sensible starting clearance
 addSegmented('lidModeSeg', 'lidMode', [['none', 'None'], ['friction', 'Friction'], ['snap', 'Snap'], ['twist', 'Twist'], ['magnet', 'Magnets']],
-  v => { const c = { friction: 0.15, snap: 0.25, twist: 0.3 }[v]; if (c !== undefined) sliders.lidClear.set(c); });
+  v => { const c = { friction: 0.15, snap: 0.25, twist: 0.3, magnet: 0.25 }[v]; if (c !== undefined) sliders.lidClear.set(c); });
 addSlider('twistFields', 'twistLock', 'Lock tightness', 0, 1, 0.05);
 addSegmented('insSeg', 'trayInsert', [['none', 'None'], ['insert', 'Insert (glue or press fit)']]);
 addSlider('insFields', 'insertT', 'Insert thickness', 0.6, 3, 0.1);
@@ -2834,8 +2989,21 @@ function update() {
   scheduleSave();   // remember these settings (browser + link)
   // --- show/hide the controls that only apply to some choices ---
   document.getElementById('modeHint').textContent = state.mode === 'inner'
-    ? 'Numbers are the usable space inside. Walls and floor get added around it.'
-    : 'Numbers are the outside footprint and total height.';
+    ? 'Inside dimensions (ID): numbers are the usable space inside. Walls and floor get added around it, and the box gets taller by however far the lid reaches in, so the full height is still free with the lid on.'
+    : 'Outside dimensions (OD): numbers are the outside of the closed box, lid included, so it fits the space you measured. Pull tabs stick out past it.';
+  // Vase mode slicer tips (only when Solid is picked). Bottom layers: enough to
+  // cover a label cut into the bottom (letter depth / 0.2 mm layers) plus 2 solid
+  // layers over it, or Bambu's usual 3 when there's no bottom label.
+  show('vaseTips', state.vase);
+  if (state.vase) {
+    const botLabel = state.emboss && state.faces.bottom;
+    const botLayers = vaseBottomLayers(state);
+    document.getElementById('vaseTips').innerHTML = `<b>💡 Slicer tips for vase mode</b> (Bambu Studio, 0.4 nozzle)<ul>
+      <li><b>Spiral vase</b> on (Others tab).</li>
+      <li><b>Line widths 0.8–1.0 mm</b> (Quality &gt; Line width). A 0.4 nozzle can lay a line about twice as wide, so the single wall comes out much stiffer.</li>
+      <li><b>Bottom shell layers: ${botLayers}</b>${botLabel ? ` so the ${fmt(state.textDepth)} mm label cut into the bottom has solid plastic over it` : ''}. Top shell layers 0.</li>
+    </ul>Inside size, filament and time all assume 0.95 mm lines and ${botLayers} bottom layers.`;
+  }
   show('nestFields', state.stack === 'nest');
   show('lipFields', state.stack === 'lip');
   document.getElementById('stackHint').textContent = {
@@ -2871,9 +3039,9 @@ function update() {
   show('lidBox', lidOn);
   show('lidStyleWrap', !mag);
   const twist = state.lidFit === 'twist';
-  show(sliders.plugDepth.wrap, !mag && !twist);   // twist plug depth is set by the slot layout
-  show(sliders.lidClear.wrap, !mag);
-  show(sliders.plugWall.wrap, !mag && (state.lidStyle === 'flat' || twist));
+  show(sliders.plugDepth.wrap, !twist);   // twist plug depth is set by the slot layout
+  show(sliders.lidClear.wrap, true);
+  show(sliders.plugWall.wrap, mag || state.lidStyle === 'flat' || twist);
   show(sliders.rimDepth.wrap, !mag && state.lidStyle === 'stack');
   show('snapBox', state.lidFit === 'snap');
   show(sliders.bumpLen.wrap, state.snapStyle === 'sides');
@@ -2894,7 +3062,7 @@ function update() {
     friction: 'A plug pushes into the box and holds by a snug fit. Less clearance = tighter.',
     snap: 'A bump on the plug clicks into a groove inside the box.',
     twist: 'Twist to lock, like a jar. Works best on square-ish boxes; the opening becomes round.',
-    magnet: 'Magnets hold a flat lid in place. No plug, so the inside stays fully usable.'
+    magnet: 'A loose plug keeps the lid from sliding around and magnets hold it down. The magnets sit in short corner posts that chamfer into the wall, so the space under them stays open.'
   }[state.lidMode];
   document.getElementById('lidStyleHint').textContent = state.lidStyle === 'flat'
     ? 'Flat lid prints plate-side down.'
@@ -2963,8 +3131,9 @@ function update() {
   const vol = meshVolume(boxTrisAll) / 1000; // cm^3
   let allVol = vol;   // running total of every part that "Export all" saves
   const rows = [
-    ['Outer size', `${fmt(g.hw * 2)} × ${fmt(g.hd * 2)} × ${fmt(g.Ho)}`],
-    g.vase ? ['Inside', 'solid (vase mode)'] : ['Inner size', `${fmt(g.hw * 2 - 2 * g.t)} × ${fmt(g.hd * 2 - 2 * g.t)} × ${fmt(g.Ho - g.f)}`],
+    // With a lid, the outside is the closed box + lid (what you'd fit on a shelf)
+    (() => { const a = lidOutside(g); return ['Outside (OD)', `${fmt((g.hw + a.grow) * 2)} × ${fmt((g.hd + a.grow) * 2)} × ${fmt(g.Ho + a.up)}${g.lid ? ' with lid' : ''}`]; })(),
+    g.vase ? ['Inside (ID)', `${fmt(g.hw * 2 - 2 * VASE_LINE)} × ${fmt(g.hd * 2 - 2 * VASE_LINE)} × ${fmt(g.Ho - vaseBottomLayers(state) * 0.2)} (vase)`] : ['Inside (ID)', `${fmt(g.hw * 2 - 2 * g.t)} × ${fmt(g.hd * 2 - 2 * g.t)} × ${fmt(g.Ho - g.f - (g.lid ? lidDrop(state) : 0))}${g.lid && lidDrop(state) > 0 ? ' under lid' : ''}`],
     ['total', 'Filament (all parts)', ''],   // filled in below once every part is measured
     ['total', 'Print time (all parts)', ''],
     ['Corner radius out / in', `${fmt(Math.max(g.rO, 0))} / ${fmt(Math.max(g.rO - g.t, 0))}`]
@@ -2981,17 +3150,27 @@ function update() {
     rows.push(['Each stacked box adds', `${fmt(g.pitch)} mm`]);
     rows.push(['Usable height when stacked', `${fmt(g.pitch - g.f)} mm`]);
   }
+  if (g.lidAdj && (g.lidAdj.up > 0.001 || g.lidAdj.grow > 0.001)) {
+    const a = g.lidAdj, bits = [];
+    if (a.up > 0.001) bits.push(`${fmt(a.up)} mm shorter`);
+    if (a.grow > 0.001) bits.push(`${fmt(2 * a.grow)} mm narrower`);
+    rows.push(['Box made smaller for the lid', `${bits.join(', ')} (box alone ${fmt(g.hw * 2)} × ${fmt(g.hd * 2)} × ${fmt(g.Ho)})`]);
+  }
+  if (g.drop > 0) rows.push(['Added to height for the lid', `+${fmt(g.drop)} mm (rim is ${fmt(g.Ho - g.f)} mm above the floor)`]);
   if (state.divOn && !g.vase) rows.push(['Divider height', `${fmt(g.divTop - g.f)} mm`]);
   if (g.holes) rows.push(['Drain holes', `${g.holes.n} × Ø${fmt(g.holes.D)} mm`]);
   if (state.emboss) {
     const shown = [...built.labels, ...(lidBuilt ? lidBuilt.labels : [])].filter(l => l[1] > 0).map(l => `${l[0]} ${fmt(l[1])}`);
     if (shown.length) rows.push(['Label height (mm)', shown.join(', ')]);
   }
-  rows.push(['Box', partEst(vol)]);
+  // Vase mode: estimate from one wide wall + bottom layers instead of the solid block
+  const vaseBot = vaseBottomLayers(state) * 0.2;
+  const vaseV = g.vase ? vaseExtruded(boxTrisAll, vaseBot) : 0;
+  rows.push(['Box', g.vase ? `≈ ${fmt(vaseGrams(vaseV))} g · ${fmtTime(vaseSeconds(vaseV))}` : partEst(vol)]);
   if (g.lid) {
     const L = g.lid, lv = meshVolume(lidTrisAll) / 1000;
     const grow = L.style === 'stack' ? L.to : 0;
-    const lidH = L.fit === 'magnet' ? L.lt : (L.style === 'stack' ? L.zTop : L.lt + L.P);
+    const lidH = L.style === 'stack' ? L.zTop : L.lt + L.P;
     rows.push(['sep']);
     rows.push(['Lid size', `${fmt((g.hw + grow) * 2)} × ${fmt((g.hd + grow) * 2)} × ${fmt(lidH)}`]);
     rows.push(['Closed height', `${fmt(L.style === 'stack' ? L.seat + L.zTop : g.Ho + L.lt)} mm`]);
@@ -3024,10 +3203,10 @@ function update() {
     allVol += iv;
   }
   // Totals go in the top rows so they show even when the list is collapsed
-  rows[2][2] = `≈ ${Math.round(estGrams(allVol))} g PLA`;
-  rows[3][2] = `≈ ${fmtTime(estSeconds(allVol) + PREP_S)}`;
+  rows[2][2] = `≈ ${Math.round(g.vase ? vaseGrams(vaseV) : estGrams(allVol))} g PLA`;
+  rows[3][2] = `≈ ${fmtTime((g.vase ? vaseSeconds(vaseV) : estSeconds(allVol)) + PREP_S)}`;
   rows.push(['sep']);
-  rows.push(['Estimate based on', 'Bambu 0.20 mm Standard, PLA']);
+  rows.push(['Estimate based on', g.vase ? `Bambu 0.20 mm, spiral vase, 0.95 mm lines, ${Math.round(vaseBot / 0.2)} bottom layers` : 'Bambu 0.20 mm Standard, PLA']);
   rows.push(['Plate prep (heat, level)', `≈ ${fmtTime(PREP_S)}`]);
   rows.push(['Triangles', (boxTrisAll.length + (lidTrisAll ? lidTrisAll.length : 0)).toLocaleString()]);
   document.getElementById('info').innerHTML = rows.map(r => {
