@@ -46,6 +46,26 @@
   #paneHead { flex: none; display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
   #paneHead svg { width: 24px; height: 24px; color: var(--accent); }
   #paneHead h2 { margin: 0; font-size: 18px; }
+
+  /* Reset (this section), and the Share / Reset all buttons on the right of the top bar */
+  .resetSec { margin-left: auto; display: flex; align-items: center; gap: 4px; border: 1px solid var(--line);
+    background: #fff; border-radius: 6px; padding: 4px 9px; font: inherit; font-size: 12px; color: #4a5560; cursor: pointer; }
+  .resetSec svg { width: 14px; height: 14px; color: #4a5560; }
+  .resetSec:hover { background: #f4f7f9; }
+  .topSpacer { flex: 1; min-width: 12px; }
+  .topBtn { flex: none; align-self: center; display: flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+    background: #fff; border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 500;
+    color: var(--text); cursor: pointer; margin-left: 6px; white-space: nowrap; }
+  .topBtn svg { width: 16px; height: 16px; }
+  .topBtn:hover { background: #f4f7f9; }
+  #shareBtn { border-color: #9fd8b3; color: var(--accent-text); background: var(--accent-soft); }
+  .topBtn.confirm { background: var(--err-bg); border-color: #f1b8b3; color: var(--err); }
+
+  /* Little message that pops up at the bottom ("Link copied") */
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0;
+    background: #1f2933; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: 90vw;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18); pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #paneBody { flex: 1; overflow-y: auto; padding: 0 16px 16px; min-height: 0; }
   .pane { display: none; }
   .pane.active { display: block; }
@@ -123,7 +143,8 @@
     max-height: 260px; overflow-y: auto; }
   #info div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
   #info div.sep { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
-  #info.collapsed > div:nth-child(n+4) { display: none; }
+  #info.collapsed > div:nth-child(n+5) { display: none; }
+  #info > div.total span:last-child { font-weight: 700; color: var(--accent-text); }
   #info span:first-child { color: var(--muted); }
   #info span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   #msgs { max-height: 150px; overflow-y: auto; }
@@ -137,6 +158,22 @@
   .exportBtn svg { width: 18px; height: 18px; }
   .exportBtn.secondary { background: #fff; color: var(--accent-text); border: 1.5px solid var(--accent); padding: 9px; font-size: 14px; }
   .exportBtn:disabled { background: #b7c2cc; color: #fff; border-color: #b7c2cc; cursor: not-allowed; }
+
+  /* Split export button: big part = export all, arrow = pick one part */
+  .splitBtn { position: relative; display: flex; margin-top: 10px; }
+  .splitBtn .exportBtn { margin-top: 0; }
+  .splitBtn .main { flex: 1; border-radius: 8px 0 0 8px; }
+  .splitBtn .caret { flex: none; width: 46px; padding: 0; border-radius: 0 8px 8px 0; border-left: 1px solid rgba(255,255,255,.4); }
+  .splitBtn .caret svg { width: 16px; height: 16px; }
+  .exportMenu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); background: #fff; border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.14); padding: 4px; z-index: 5; }
+  .exportMenu[hidden] { display: none; }
+  .menuItem { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 8px 10px;
+    border: 0; background: none; border-radius: 6px; font: inherit; font-size: 14px; font-weight: 600; color: var(--text);
+    cursor: pointer; text-align: left; }
+  .menuItem small { font-weight: 400; font-size: 11.5px; color: var(--muted); word-break: break-all; }
+  .menuItem:hover, .menuItem:focus-visible { background: var(--accent-soft); outline: none; }
+  .menuSep { height: 1px; background: var(--line); margin: 4px 6px; }
   .fileName { font-size: 12px; color: var(--muted); margin-top: 3px; word-break: break-all; text-align: center; }
   #version { font-size: 11px; color: #a3adb8; text-align: center; margin-top: 8px; }
 
@@ -174,6 +211,9 @@
     <symbol id="i-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11V4a1 1 0 0 1 1-1h7l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/></symbol>
     <symbol id="i-lid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M3 7.5h18M10 4.5h4"/></symbol>
     <symbol id="i-view" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M4 20h16"/></symbol>
   </defs>
 </svg>
@@ -189,11 +229,16 @@
   <button class="tab" data-tab="label"><svg><use href="#i-label"/></svg>Label<i class="dot" id="bdgLabel"></i></button>
   <button class="tab" data-tab="lid"><svg><use href="#i-lid"/></svg>Lid<i class="dot" id="bdgLid"></i></button>
   <button class="tab" data-tab="view"><svg><use href="#i-view"/></svg>View</button>
+  <div class="topSpacer"></div>
+  <button class="topBtn" id="shareBtn" title="Copy a link with all these settings"><svg><use href="#i-link"/></svg>Share</button>
+  <button class="topBtn" id="resetAllBtn" title="Put every setting back to the starting values"><svg><use href="#i-reset"/></svg>Reset all</button>
 </header>
 
+<div id="toast"></div>
 <div id="app">
   <div id="panel">
-    <div id="paneHead"><svg><use id="paneIcon" href="#i-size"/></svg><h2 id="paneTitle">Size</h2></div>
+    <div id="paneHead"><svg><use id="paneIcon" href="#i-size"/></svg><h2 id="paneTitle">Size</h2>
+      <button class="resetSec" id="resetSecBtn" title="Put just this section back to the starting values"><svg><use href="#i-reset"/></svg>Reset</button></div>
 
     <div id="paneBody">
       <!-- ===== Size ===== -->
@@ -297,10 +342,17 @@
             <div id="snapFields"></div>
           </div>
 
+          <div id="insBox">
+            <div class="sublabel">Tray insert</div>
+            <div class="seg" id="insSeg"></div>
+            <p class="hint" id="insHint"></p>
+            <div id="insFields"></div>
+          </div>
+
           <div id="twistBox">
             <div class="sublabel">Twist lock</div>
             <div id="twistFields"></div>
-            <p class="hint">Push the lid down and turn it about 30° clockwise to lock. The box gets a round opening with slots inside; a 45° funnel under it means no supports. Print the box and lid with the same settings so the fit is predictable.</p>
+            <p class="hint">The lugs are spaced unevenly, so the lid only drops in one way: turn it until it drops, push down, then turn about 30° clockwise until the corners line up. Too tight? Lower Lock tightness. The box gets a round opening with slots inside; a 45° funnel under it means no supports.</p>
           </div>
 
           <div id="magBox">
@@ -330,6 +382,9 @@
         <div class="sublabel" style="margin-top:0">Stack preview</div>
         <div class="seg" id="previewSeg"></div>
         <p class="hint">See-through copies stacked on top so you can check how they sit.</p>
+        <div class="sublabel">Build plate</div>
+        <div class="seg" id="plateSeg"></div>
+        <p class="hint">Parts are laid out around the box on this plate so you can see if they print together. Each STL still saves on its own.</p>
         <div class="sublabel">Cut view</div>
         <div class="seg" id="cutSeg"></div>
         <p class="hint">Slices off the half nearest you to show wall thickness and how parts fit.</p>
@@ -343,14 +398,14 @@
       <div class="footHead"><b>Result</b><button class="linkBtn" id="detailsBtn">Show all details</button></div>
       <div id="info" class="collapsed"></div>
       <div id="msgs"></div>
-      <button class="exportBtn" id="exportBtn"><svg><use href="#i-download"/></svg>Export box STL</button>
-      <div class="fileName" id="fileName"></div>
-      <div id="lidExportWrap">
-        <button class="exportBtn secondary" id="exportLidBtn"><svg><use href="#i-download"/></svg>Export lid STL</button>
-        <div class="fileName" id="lidFileName"></div>
+      <div class="splitBtn">
+        <button class="exportBtn main" id="exportAllBtn"><svg><use href="#i-download"/></svg><span id="exportAllLabel">Export all</span></button>
+        <button class="exportBtn caret" id="exportCaret" aria-label="Export one part" aria-haspopup="true" aria-expanded="false" title="Export one part"><svg><use href="#i-caret"/></svg></button>
+        <div class="exportMenu" id="exportMenu" hidden></div>
       </div>
+      <div class="fileName" id="exportSummary"></div>
       <!-- Version lives here, small and out of the way -->
-      <div id="version">v2026.10.16.05</div>
+      <div id="version">v2026.10.17.08</div>
     </div>
   </div>
 
@@ -437,7 +492,10 @@ const state = {
   rimDepth: 3,         // stackable lid: how deep the tray is that the next box sits in
   magD: 6, magT: 3,    // magnet size
   magFit: 0.15,        // extra hole diameter over the magnet (press fit)
-  twistLock: 0.5,      // twist lid: how far the slots ramp down at the end of the turn (more = tighter)
+  twistLock: 0.35,     // twist lid: how far the slots ramp down at the end of the turn (more = tighter)
+  trayInsert: 'none',  // stackable twist lid: 'none' | 'insert' (a thin plate that covers the tray floor)
+  insertT: 1,          // insert thickness (the tray gets this much deeper)
+  insertClear: 0.1,    // gap per side between insert and tray wall (small = friction fit, still room for glue)
   tabPos: 'none',      // 'none' | 'front' | 'back' | 'left' | 'right' | corners 'fl' 'fr' 'bl' 'br'
   lidTab: false, tabW: 20, tabL: 8,
   notchSide: 'none',   // 'none' | 'front' | 'back' | 'left' | 'right'
@@ -445,6 +503,7 @@ const state = {
   lidView: 'beside',   // 'beside' (print position) | 'on' (assembled)
 
   previewSel: 'off', cutSel: 'off',
+  plate: '256',        // build plate size for the layout preview
   preview: false,
   cut: false,
   color: '#2fb36b'
@@ -788,6 +847,12 @@ function computeGeometry(p) {
       if (Ho - f < L.md + 2) errs.push('Box is too short for magnet posts.');
       if (p.stack === 'nest') warns.push('Magnet posts in the corners stop boxes nesting.');
     } else if (L.fit === 'twist') {
+      // Tray insert (stackable twist lid only). A lid-top label then goes on the insert,
+      // since the insert covers the tray floor.
+      if (L.style === 'stack' && p.trayInsert === 'insert') {
+        L.insert = { t: Math.max(0.6, p.insertT), c: p.insertClear, label: L.eTop > 0 };
+        L.eTop = 0;
+      }
       // Twist lock (bayonet). A rectangular lid can't turn in a rectangular opening,
       // so the box gets a round neck at the top: a deck across the top with a round
       // hole, L-shaped slots cut into the hole's wall, and a 45° funnel underneath
@@ -805,10 +870,15 @@ function computeGeometry(p) {
       const N = Rn >= 14 ? 3 : 2, phi = 30 * deg;              // lugs, and how far you turn
       const beta = Math.min(30 * deg, 9 / Math.max(Rn, 1));    // lug width (about 9 mm)
       const delta = (c + 0.2) / Math.max(Rn, 1);               // side gap around each lug
-      const alphas = [];
-      for (let k = 0; k < N; k++) alphas.push(30 * deg + phi + k * 2 * Math.PI / N);
+      // Lugs are spaced unevenly on purpose: that way the lid only goes in ONE way,
+      // the way that ends up flush with the box (with even spacing a 3-lug lid could
+      // go in 3 ways and only 1 of them lines up with the box's corners).
+      const spacing = N === 3 ? [0, 110, 235] : [0, 170];
+      const alphas = spacing.map(s => (30 + s) * deg + phi);
       const kb = Math.max(0.2, (t - (g.edges.topO ? g.edges.topO.s : 0)) * 0.5);   // deck tucks this far into the wall
-      L.tw = { sd, c, c2: 1.5 * c, gTop: 0.25, ramp, hc, Rn, Rp: Rn - c, zt, zb, zn0, zP0, N, phi, beta, delta, alphas, kb, zFmin: Ho };
+      // gTop = gap above the lugs before the ramp squeezes. It follows Fit clearance, so that one
+      // slider loosens the whole lid (around the plug, beside the lugs and above them).
+      L.tw = { sd, c, c2: 1.5 * c, gTop: Math.max(0.15, c), ramp, hc, Rn, Rp: Rn - c, zt, zb, zn0, zP0, N, phi, beta, delta, alphas, kb, zFmin: Ho };
       L.P = Ho - zP0; L.b = 0;
       if (Rn < 8) errs.push('Box is too small for a twist lid (the round opening would be under 16 mm).');
       else {
@@ -825,11 +895,21 @@ function computeGeometry(p) {
         // it needs no flare and stays compact. The tray floor bridges across when printed.
         L.upsideDown = true;
         L.seat = Ho;                 // lid's underside sits on the box top
+        // Stiff lid allowance: this lid is a plate boxed in by the tray walls, so it can't flex
+        // the way the thin flat lid does while the lugs ride up the ramp. Give it a bit more
+        // room above the lugs and around the plug so it turns like the flat one.
+        // (The box doesn't change, so one box works with either twist lid.)
+        L.stiff = { dR: 0.1, dZ: 0.15 };
+        L.tw = { ...L.tw, Rp: L.tw.Rp - L.stiff.dR, gTop: L.tw.gTop + L.stiff.dZ };
         const b0 = outer[0][1]; L.b0 = b0; L.ti = b0 + c; L.to = Math.max(0, L.ti + t);
-        L.zTop = L.lt + p.rimDepth;  // tray top, measured from the lid's underside
-        L.zc = L.lt;                 // the next box sits on the tray floor
         L.bridge = 2 * (Math.min(hw, hd) + L.ti);
-        if (L.bridge > 60) warns.push(`The tray floor bridges ${fmt(L.bridge)} mm when printed upside down. Up to about 60 mm prints clean; longer may sag a little (it's hidden under the stacked box).`);
+        // Tray insert: a separate thin plate that drops into the tray and covers the
+        // floor (the floor is the side that prints over supports, so it can look rough).
+        // The tray gets deeper by the insert's thickness so the next box still sits as deep.
+        const ins = L.insert ? L.insert.t : 0;
+        L.zTop = L.lt + ins + p.rimDepth;
+        L.zc = L.lt + ins;
+        if (!L.insert && L.bridge > 60) warns.push(`The tray floor bridges ${fmt(L.bridge)} mm when printed upside down. Up to about 60 mm prints clean; longer may sag a little. A tray insert (below) covers it.`);
       }
     } else {
       // A cut-in lid label needs solid lid under it, so thicken the lid if needed
@@ -1229,6 +1309,7 @@ function buildLabels(g, p, raster, shells, labels) {
 // Build the lid in the position it should be printed in. Returns closed shells.
 function buildLid(g, p, raster) {
   const L = g.lid, t = g.t, shells = [], labels = [];
+  let insert = null;   // stackable twist lid's tray insert (its own STL)
   const ring = (z, taper, surf) => roundedRing(g.hw + taper + surf, g.hd + taper + surf, g.R(surf, taper), z);
 
   // Plug ring with snap bumps. 'ring' = bump all the way around. 'sides' = a short
@@ -1312,6 +1393,7 @@ function buildLid(g, p, raster) {
         const Rr = ri - 1, ras = Rr > 3 ? raster(2 * 0.8 * Rr, 2 * 0.45 * Rr, 0) : null;
         labels.push(['Lid underside', raiseFace(shells, ras, L.zTop, p.textDepth, mapPlain)]);
       }
+      if (L.insert) insert = buildInsert(g, p, L, raster, labels);
     }
   } else if (L.fit === 'magnet') {
     // Magnet lid: plate with 4 pockets on its underside (printed facing up, so no bridges)
@@ -1426,7 +1508,24 @@ function buildLid(g, p, raster) {
       : (k ? L.zTop : (i ? L.zTop - th : L.zTop - th - cols[j].span));
     shells.push(gridBlock(1, N, (i, j, k) => { const q = i ? cols[j].out : cols[j].inn; return toPrint([q[0], q[1], zAt(i, j, k)]); }));
   }
-  return { shells, labels };
+  return { shells, labels, insert };
+}
+
+// Tray insert for the stackable twist lid: a thin plate the shape of the tray floor.
+// Prints flat (bottom on the bed, small 45° chamfer on the bottom edge so elephant's
+// foot doesn't make it too big). A lid-top label is cut into its top face.
+function buildInsert(g, p, L, raster, labels) {
+  const I = L.insert, s = L.ti - I.c, ch = 0.3, shells = [];
+  const ring = (z, inset) => roundedRing(g.hw + inset, g.hd + inset, g.R(inset, 0), z);
+  const e = I.label ? Math.min(p.textDepth, I.t - 0.4) : 0;
+  const eOk = e >= 0.2;
+  const zTopBody = eOk ? I.t - e : I.t;
+  shells.push(stitch([{ c: [0, 0, 0] }, ring(0, s - ch), ring(ch, s), ring(zTopBody, s), { c: [0, 0, zTopBody] }]));
+  if (eOk) {
+    const poly = ring(0, s).map(q => [q[0], q[1]]);
+    labels.push(['Lid top (on insert)', engraveFace(shells, raster, poly, g.hw + s, g.hd + s, g.R(s, 0), zTopBody - 0.05, I.t, mapPlain)]);
+  } else if (I.label) labels.push(['Lid top (on insert)', 0]);
+  return shells;
 }
 
 // A point on the lid's edge at distance s along it (s = 0 is the middle of the
@@ -1764,7 +1863,7 @@ function compile(vsSrc, fsSrc, attribs) {
 
 let meshProg, lineProg;
 const buffers = {};
-const meshes = { box: null, lid: null, mag: null };
+const meshes = { box: null, lid: null, mag: null, ins: null };
 
 function initGL() {
   // Part shader: soft key light + a "headlight" from the camera so nothing goes black.
@@ -1806,15 +1905,49 @@ function initGL() {
     void main() { gl_FragColor = uColor; }
   `, ['aPos']);
 
-  // Build plate: 256 x 256 mm with a 10 mm grid, darker lines every 50 mm.
-  // Sits a hair below z=0 so it doesn't flicker against the box bottom.
-  const S = 128, zP = -0.06, zL = -0.04;
+  buildPlate();
+}
+
+// Build plate sizes to lay parts out on (width x depth, mm)
+/* ===== Filament and time estimate =====
+   We don't slice, so this is a rule of thumb tuned against a real Bambu
+   Studio slice (P2S, 0.4 nozzle, 0.20 mm Standard, PLA) of the default
+   50 mm box + snap lid: Bambu said 38.1 g and 44.5 min of printing.
+   - Grams: solid volume x PLA density (1.24), minus ~6% because the slicer
+     uses a little infill and lines don't pack perfectly.
+   - Time: about 82 seconds per cm³ of solid part, plus a fixed plate prep
+     (heating, leveling) of ~7 min. Thin-walled boxes print mostly walls, so
+     this holds up well; big solid blocks will run longer than shown.
+   Expect it to be within about 10-15% of what the slicer says. */
+const PLA_DENSITY = 1.24, FILL_FACTOR = 0.94, SEC_PER_CM3 = 81.6, PREP_S = 421;
+const estGrams = v => v * PLA_DENSITY * FILL_FACTOR;
+const estSeconds = v => v * SEC_PER_CM3;
+function fmtTime(s) {
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+// One part's line in the expanded list: grams and print time (no plate prep)
+const partEst = v => `≈ ${fmt(estGrams(v))} g · ${fmtTime(estSeconds(v))}`;
+
+const PLATES = { '256': [256, 256], 'h2': [325, 320], '180': [180, 180] };
+const plateSize = () => PLATES[state.plate] || PLATES['256'];
+// Build plate drawing: 10 mm grid, darker lines every 50 mm, centered on the box.
+// Sits a hair below z=0 so it doesn't flicker against the box bottom.
+let plateBuilt = null;
+function buildPlate() {
+  if (!gl || plateBuilt === state.plate) return;
+  plateBuilt = state.plate;
+  const [W, D] = plateSize(), X = W / 2, Y = D / 2, zP = -0.06, zL = -0.04;
   const minor = [], major = [];
-  for (let v = -S; v <= S; v += 10) {
-    const arr = (v % 50 === 0) ? major : minor;
-    arr.push(v, -S, zL, v, S, zL, -S, v, zL, S, v, zL);
+  for (let v = 0; v <= X + 1e-6; v += 10) for (const x of v ? [v, -v] : [0]) {
+    (Math.round(x) % 50 === 0 ? major : minor).push(x, -Y, zL, x, Y, zL);
   }
-  buffers.plate = makeBuf([-S, -S, zP, S, -S, zP, S, S, zP, -S, -S, zP, S, S, zP, -S, S, zP]);
+  for (let v = 0; v <= Y + 1e-6; v += 10) for (const y of v ? [v, -v] : [0]) {
+    (Math.round(y) % 50 === 0 ? major : minor).push(-X, y, zL, X, y, zL);
+  }
+  major.push(-X, -Y, zL, X, -Y, zL, X, -Y, zL, X, Y, zL, X, Y, zL, -X, Y, zL, -X, Y, zL, -X, -Y, zL);   // plate edge
+  for (const k of ['plate', 'minor', 'major']) if (buffers[k]) gl.deleteBuffer(buffers[k]);
+  buffers.plate = makeBuf([-X, -Y, zP, X, -Y, zP, X, Y, zP, -X, -Y, zP, X, Y, zP, -X, Y, zP]);
   buffers.minor = makeBuf(minor); buffers.minorN = minor.length / 3;
   buffers.major = makeBuf(major); buffers.majorN = major.length / 3;
 }
@@ -1863,26 +1996,71 @@ function sceneObjects() {
       // Flat and magnet lids print upside down, so flip them over to sit them on the box
       // Lids that print upside down get flipped over to sit them on the box
       if (g.lid.style === 'flat') objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.lt], flip: -1, alpha: 1, color: light });
-      else if (g.lid.upsideDown) objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.zTop], flip: -1, alpha: 1, color: light });
+      else if (g.lid.upsideDown) {
+        objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.zTop], flip: -1, alpha: 1, color: light });
+        if (meshes.ins) objs.push({ m: meshes.ins, off: [0, 0, g.Ho + g.lid.lt], flip: 1, alpha: 1, color: dark });   // sitting in the tray
+      }
       else objs.push({ m: meshes.lid, off: [0, 0, g.lid.seat], flip: 1, alpha: 1, color: light });
-    } else {
-      const lidHalf = g.hw + (g.lid.style === 'stack' ? g.lid.to : 0);
-      objs.push({ m: meshes.lid, off: [g.hw + lidHalf + 12, 0, 0], flip: 1, alpha: 1, color: light });
     }
   }
-  if (hasLid && g.lid.fit === 'magnet' && meshes.mag) {
-    const mh = (meshes.mag.b[1] - meshes.mag.b[0]) / 2;
-    objs.push({ m: meshes.mag, off: [-(g.hw + mh + 12), 0, 0], flip: 1, alpha: 1, color: dark });
-  }
+  // Everything else is laid out around the box in print position, on the build plate
+  const extras = [];
+  if (hasLid && !lidOn) extras.push({ m: meshes.lid, color: light });
+  if (hasLid && !lidOn && meshes.ins) extras.push({ m: meshes.ins, color: dark });
+  if (hasLid && g.lid.fit === 'magnet' && meshes.mag) extras.push({ m: meshes.mag, color: dark });
+  const lay = layoutAround(meshes.box.b, extras);
+  // Slide the box (and anything sitting on it) over with the group so everything is centered
+  for (const o of objs) { o.off = [o.off[0] + lay.shift[0], o.off[1] + lay.shift[1], o.off[2]]; }
+  for (const e of lay.items) objs.push({ m: e.m, off: e.off, flip: 1, alpha: 1, color: e.color });
   if (state.preview) {
+    const [sx, sy] = lay.shift;
     if (lidOn) {
-      if (g.lid.style === 'stack') objs.push({ m: meshes.box, off: [0, 0, g.lid.seat + g.lid.zc], flip: 1, alpha: 0.35, color: base });
+      if (g.lid.style === 'stack') objs.push({ m: meshes.box, off: [sx, sy, g.lid.seat + g.lid.zc], flip: 1, alpha: 0.35, color: base });
     } else if (g.pitch) {
-      for (let k = 1; k <= 2; k++) objs.push({ m: meshes.box, off: [0, 0, g.pitch * k], flip: 1, alpha: 0.35, color: base });
+      for (let k = 1; k <= 2; k++) objs.push({ m: meshes.box, off: [sx, sy, g.pitch * k], flip: 1, alpha: 0.35, color: base });
     }
   }
   return objs;
 }
+// Build plate layout for the preview. The box goes first; each other part is tried
+// right / left / behind / in front of the box or of a part already placed, picking the
+// spot that keeps the whole group smallest (and on the plate if at all possible).
+// Then the whole group is centered on the plate, so the box stays near the middle.
+// "Export all" uses this same layout to build its one combined STL; single-part exports stay centered.
+const PART_GAP = 8;
+function layoutAround(boxB, items) {
+  const [PW, PD] = plateSize();
+  const placed = [[boxB[0], boxB[1], boxB[2], boxB[3]]], out = [];
+  const hits = r => placed.some(q => r[0] < q[1] + PART_GAP && r[1] > q[0] - PART_GAP && r[2] < q[3] + PART_GAP && r[3] > q[2] - PART_GAP);
+  const groupWith = r => placed.concat([r]).reduce((g, q) => [Math.min(g[0], q[0]), Math.max(g[1], q[1]), Math.min(g[2], q[2]), Math.max(g[3], q[3])], [Infinity, -Infinity, Infinity, -Infinity]);
+  // smaller is better: first how far past the plate it goes, then how big the group gets
+  const score = gb => { const w = gb[1] - gb[0], d = gb[3] - gb[2]; return Math.max(0, w - PW) * 1e6 + Math.max(0, d - PD) * 1e6 + w * d; };
+  for (const it of items) {
+    const [x0, x1, y0, y1] = it.m.b, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    let best = null;
+    for (const a of placed) {
+      const ax = (a[0] + a[1]) / 2, ay = (a[2] + a[3]) / 2;
+      for (const [ox, oy] of [
+        [a[1] + PART_GAP - x0, ay - cy], [a[0] - PART_GAP - x1, ay - cy],   // right, left
+        [ax - cx, a[3] + PART_GAP - y0], [ax - cx, a[2] - PART_GAP - y1],   // behind, in front
+        [a[1] + PART_GAP - x0, a[2] - y0], [a[0] - PART_GAP - x1, a[2] - y0] // right / left, lined up at the front edge
+      ]) {
+        const r = [x0 + ox, x1 + ox, y0 + oy, y1 + oy];
+        if (hits(r)) continue;
+        const sc = score(groupWith(r));
+        if (!best || sc < best.sc - 1e-6) best = { sc, r, off: [ox, oy, 0] };
+      }
+    }
+    placed.push(best.r);
+    out.push({ m: it.m, color: it.color, off: best.off });
+  }
+  const gb = groupWith(placed[0]);
+  const fits = gb[1] - gb[0] <= PW + 1e-6 && gb[3] - gb[2] <= PD + 1e-6;
+  const shift = [-(gb[0] + gb[1]) / 2, -(gb[2] + gb[3]) / 2, 0];   // center the group on the plate
+  for (const o of out) { o.off[0] += shift[0]; o.off[1] += shift[1]; }
+  return { items: out, fits, shift };
+}
+
 function objBounds(o) {
   const [x0, x1, y0, y1, z0, z1] = o.m.b;
   const ys = o.flip < 0 ? [-y1, -y0] : [y0, y1], zs = o.flip < 0 ? [-z1, -z0] : [z0, z1];
@@ -2083,7 +2261,7 @@ function addSlider(parentId, key, label, min, max, step, unit = 'mm') {
 
 // Pick-one button group. segs[key].set(v) lets code switch it (e.g. dividers flip to Custom when you drag).
 const segs = {};
-const REFIT = ['lidView', 'lidStyle', 'lidMode', 'shape', 'previewSel'];   // these change what's on screen, so re-frame the view
+const REFIT = ['lidView', 'lidStyle', 'lidMode', 'shape', 'previewSel', 'plate'];   // these change what's on screen, so re-frame the view
 function addSegmented(id, key, options, onChange) {
   const el = document.getElementById(id), btns = [];
   options.forEach(([val, text]) => {
@@ -2099,12 +2277,14 @@ function addSegmented(id, key, options, onChange) {
     });
     el.appendChild(b); btns.push(b);
   });
-  segs[key] = { set: v => { state[key] = v; btns.forEach(b => b.classList.toggle('active', b.dataset.val === v)); } };
+  segs[key] = { vals: options.map(o => o[0]), set: v => { state[key] = v; btns.forEach(b => b.classList.toggle('active', b.dataset.val === v)); } };
 }
 
-// Pick-any chips
+// Pick-any chips. chipSets remembers them so a reset/load can refresh which are lit.
+const chipSets = [];
 function addChips(id, obj, options) {
   const el = document.getElementById(id);
+  chipSets.push({ obj, el });
   options.forEach(([val, text]) => {
     const b = document.createElement('button');
     b.textContent = text;
@@ -2174,7 +2354,10 @@ document.getElementById('labelLine2').addEventListener('input', e => { state.lab
 // Switching fit type loads a sensible starting clearance
 addSegmented('lidModeSeg', 'lidMode', [['none', 'None'], ['friction', 'Friction'], ['snap', 'Snap'], ['twist', 'Twist'], ['magnet', 'Magnets']],
   v => { const c = { friction: 0.15, snap: 0.25, twist: 0.3 }[v]; if (c !== undefined) sliders.lidClear.set(c); });
-addSlider('twistFields', 'twistLock', 'Lock tightness', 0.2, 1, 0.05);
+addSlider('twistFields', 'twistLock', 'Lock tightness', 0, 1, 0.05);
+addSegmented('insSeg', 'trayInsert', [['none', 'None'], ['insert', 'Insert (glue or press fit)']]);
+addSlider('insFields', 'insertT', 'Insert thickness', 0.6, 3, 0.1);
+addSlider('insFields', 'insertClear', 'Insert fit gap (per side)', 0, 0.4, 0.025);
 addSegmented('lidStyleSeg', 'lidStyle', [['flat', 'Flat'], ['stack', 'Stackable']]);
 addSlider('lidFields', 'lidThick', 'Lid thickness', 0.8, 8, 0.1);
 addSlider('lidFields', 'plugDepth', 'Plug depth', 1, 20, 0.5);
@@ -2200,7 +2383,163 @@ addSegmented('lidViewSeg', 'lidView', [['beside', 'Beside (print position)'], ['
 
 addSegmented('previewSeg', 'previewSel', [['off', 'Off'], ['on', 'Show stack']]);
 addSegmented('cutSeg', 'cutSel', [['off', 'Off'], ['on', 'Cut in half']]);
-document.getElementById('colorPick').addEventListener('input', e => { state.color = e.target.value; requestRender(); });
+addSegmented('plateSeg', 'plate', [['256', '256 × 256 (A1, P2S, X1C)'], ['h2', '325 × 320 (H2D, H2C)'], ['180', '180 (A1 mini)']]);
+document.getElementById('colorPick').addEventListener('input', e => { state.color = e.target.value; requestRender(); scheduleSave(); });
+
+/* =====================================================================
+   SAVE, SHARE AND RESET
+   Your settings are saved two ways, automatically, every time you change one:
+   1. In this browser (localStorage), so the page opens where you left off.
+   2. In the page address after the # sign. Browsers never send the # part
+      to any server, it stays on your computer. Copy the address (or press
+      Share) and anyone who opens that link gets the same box.
+   Only settings that differ from the starting values are stored, so links
+   stay short. Reset puts a section (or everything) back to the start.
+   ===================================================================== */
+// Which settings belong to which top bar section (used by the Reset button)
+const SECTIONS = {
+  size:  ['mode', 'w', 'd', 'h', 'radius'],
+  walls: ['wall', 'floor', 'shape', 'edges', 'edgeStyle', 'edgeSize'],
+  stack: ['stack', 'taper', 'foot', 'clear'],
+  div:   ['divMode', 'divCols', 'divRows', 'divXs', 'divYs', 'divOff', 'divThick', 'divDrop'],
+  drain: ['drainSel', 'drainMode', 'drainD', 'drainCols', 'drainRows'],
+  label: ['labelMode', 'faces', 'labelText', 'labelLine2', 'labelFont', 'textH', 'textDepth'],
+  lid:   ['lidMode', 'lidFit', 'lidStyle', 'lidThick', 'plugDepth', 'plugWall', 'lidClear', 'snapBump', 'snapStyle',
+          'bumpLen', 'rimDepth', 'magD', 'magT', 'magFit', 'twistLock', 'trayInsert', 'insertT', 'insertClear', 'tabPos', 'tabW', 'tabL',
+          'notchSide', 'notchW', 'notchD', 'lidView'],
+  view:  ['previewSel', 'cutSel', 'plate', 'color']
+};
+const SAVE_KEYS = Object.values(SECTIONS).flat();
+const STORE_KEY = 'boxmaker.settings.v1';
+
+// A plain copy of the settings (Sets become lists) that can be turned into text
+function snapshot() {
+  const o = {};
+  for (const k of SAVE_KEYS) {
+    const v = state[k];
+    o[k] = v instanceof Set ? [...v] : Array.isArray(v) ? v.slice() : (v && typeof v === 'object') ? { ...v } : v;
+  }
+  return o;
+}
+const DEFAULTS = JSON.parse(JSON.stringify(snapshot()));   // the starting values, captured before anything loads
+
+// Only the settings that differ from the starting values
+function changedSettings() {
+  const cur = snapshot(), out = {};
+  for (const k of SAVE_KEYS) if (JSON.stringify(cur[k]) !== JSON.stringify(DEFAULTS[k])) out[k] = cur[k];
+  return out;
+}
+
+// Copy settings in, checking each one so a broken or old link can't break the page
+function applySettings(o) {
+  if (!o || typeof o !== 'object') return;
+  for (const k of SAVE_KEYS) {
+    if (!(k in o)) continue;
+    const def = DEFAULTS[k], v = o[k];
+    if (k === 'divOff') { if (Array.isArray(v)) state.divOff = new Set(v.filter(x => typeof x === 'string')); }
+    else if (k === 'divXs' || k === 'divYs') { if (Array.isArray(v)) state[k] = v.filter(Number.isFinite); }
+    else if (k === 'faces' || k === 'edges') {
+      if (v && typeof v === 'object') for (const kk in def) state[k][kk] = typeof v[kk] === 'boolean' ? v[kk] : def[kk];
+    }
+    else if (typeof def === 'number') { if (Number.isFinite(v)) state[k] = v; }
+    else if (typeof def === 'string') {
+      if (typeof v === 'string' && (!segs[k] || segs[k].vals.includes(v))) state[k] = v;   // only real choices
+    }
+  }
+}
+
+// Make every slider, button row, chip and text box show what's in the settings
+function refreshControls() {
+  for (const k in sliders) sliders[k].set(state[k]);
+  for (const k in segs) segs[k].set(state[k]);
+  for (const c of chipSets) c.el.querySelectorAll('button').forEach(b => b.classList.toggle('active', !!c.obj[b.dataset.val]));
+  document.getElementById('labelText').value = state.labelText;
+  document.getElementById('labelLine2').value = state.labelLine2;
+  document.getElementById('colorPick').value = state.color;
+  document.getElementById('divColsIn').value = state.divCols;
+  document.getElementById('divRowsIn').value = state.divRows;
+  ed.sel = null; renderSel();
+}
+
+// Text-safe encoding for the address (# part). Handles any characters in label text.
+const toCode = s => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromCode = s => decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/'))));
+
+function settingsFromHash() {
+  const m = /[#&]s=([A-Za-z0-9_-]+)/.exec(location.hash);
+  if (!m) return null;
+  try { return JSON.parse(fromCode(m[1])); } catch (e) { return null; }
+}
+function shareURL() {
+  const ch = changedSettings(), base = location.href.split('#')[0];
+  return Object.keys(ch).length ? base + '#s=' + toCode(JSON.stringify(ch)) : base;
+}
+
+// Save shortly after the last change (so dragging a slider doesn't save 100 times)
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const ch = changedSettings();
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(ch)); } catch (e) {}
+    const url = shareURL();
+    try { history.replaceState(null, '', url); } catch (e) {}   // keeps the address bar up to date without adding Back steps
+  }, 300);
+}
+
+// Little message at the bottom of the screen
+let toastTimer = null;
+function toast(msg, ms = 2600) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// Share: copy the link. Falls back to the old copy trick if the clipboard API is blocked.
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  const url = shareURL();
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { ok = document.execCommand('copy'); } catch (e2) {}
+    ta.remove();
+  }
+  // A file opened from your computer has a link that only works on your computer
+  const local = location.protocol === 'file:';
+  if (!ok) toast('Couldn\'t copy automatically. Copy the address bar instead; it has all the settings.', 4500);
+  else toast(local ? 'Link copied. Note: this file is on your computer, so the link only opens for others if the file is online.' : 'Link copied. Anyone who opens it gets this exact box.', local ? 5000 : 2600);
+});
+
+// Reset this section. One click, since it only touches what's on screen.
+document.getElementById('resetSecBtn').addEventListener('click', () => {
+  const tab = document.querySelector('#topbar .tab.active');
+  const keys = SECTIONS[tab ? tab.dataset.tab : 'size'] || [];
+  const o = {}; for (const k of keys) o[k] = DEFAULTS[k];
+  applySettings(JSON.parse(JSON.stringify(o)));
+  refreshControls(); update(); fitView();
+  toast(`${document.getElementById('paneTitle').textContent} reset.`);
+});
+
+// Reset everything. Needs a second click within 3 seconds so it can't happen by accident.
+let resetArmed = null;
+const resetAllBtn = document.getElementById('resetAllBtn');
+resetAllBtn.addEventListener('click', () => {
+  if (!resetArmed) {
+    resetAllBtn.classList.add('confirm');
+    resetAllBtn.lastChild.textContent = 'Click again to reset';
+    resetArmed = setTimeout(() => { resetArmed = null; resetAllBtn.classList.remove('confirm'); resetAllBtn.lastChild.textContent = 'Reset all'; }, 3000);
+    return;
+  }
+  clearTimeout(resetArmed); resetArmed = null;
+  resetAllBtn.classList.remove('confirm'); resetAllBtn.lastChild.textContent = 'Reset all';
+  applySettings(JSON.parse(JSON.stringify(DEFAULTS)));
+  refreshControls(); update(); fitView();
+  toast('Everything is back to the starting settings.');
+});
+
+
 
 /* =====================================================================
    DIVIDER EDITOR ("paint" the dividers)
@@ -2480,7 +2819,7 @@ window.addEventListener('resize', () => drawEditor());
    panel, and enables/disables export. If the settings are impossible,
    it keeps showing the last good parts and blocks export.
    ===================================================================== */
-let current = null, boxTrisAll = null, lidTrisAll = null, magTrisAll = null;
+let current = null, boxTrisAll = null, lidTrisAll = null, magTrisAll = null, insTrisAll = null;
 const show = (el, on) => { (typeof el === 'string' ? document.getElementById(el) : el).style.display = on ? '' : 'none'; };
 // Green dot on a top bar button when that feature is on; hovering the button shows what's set
 const badge = (id, text) => {
@@ -2492,6 +2831,7 @@ const badge = (id, text) => {
 
 function update() {
   syncDerived();
+  scheduleSave();   // remember these settings (browser + link)
   // --- show/hide the controls that only apply to some choices ---
   document.getElementById('modeHint').textContent = state.mode === 'inner'
     ? 'Numbers are the usable space inside. Walls and floor get added around it.'
@@ -2529,7 +2869,6 @@ function update() {
     (lidOn ? (stackLid ? ' Stackable lid labels are cut in so a box still sits flat on it.'
                        : ' Lid top is cut in (it prints face-down); lid underside is raised.') : '');
   show('lidBox', lidOn);
-  show('lidExportWrap', lidOn);
   show('lidStyleWrap', !mag);
   const twist = state.lidFit === 'twist';
   show(sliders.plugDepth.wrap, !mag && !twist);   // twist plug depth is set by the slot layout
@@ -2540,6 +2879,14 @@ function update() {
   show(sliders.bumpLen.wrap, state.snapStyle === 'sides');
   show('magBox', mag);
   show('twistBox', twist);
+  // Tray insert: only for the stackable twist lid (it prints upside down, so its tray floor
+  // is the side over the supports and can come out rough)
+  const insAvail = twist && state.lidStyle === 'stack', insOn = insAvail && state.trayInsert === 'insert';
+  show('insBox', insAvail);
+  show('insFields', insOn);
+  document.getElementById('insHint').textContent = insOn
+    ? 'A thin plate that drops into the tray and covers the floor, so support marks don\'t show. The tray is made deeper to fit it. At the default gap it holds by friction; add a few dots of glue (CA or epoxy) if you want it permanent. Smaller gap = tighter. Print it flat; the bottom edge has a small chamfer for elephant\'s foot.'
+    : 'This lid prints upside down, so the tray floor is printed over supports and can look rough. An insert covers it.';
   show('tabFields', state.lidTab);
   show('notchFields', state.notch);
   document.getElementById('lidHint').textContent = state.vase ? 'Lids are off in vase mode.' : {
@@ -2586,7 +2933,7 @@ function update() {
   const msgs = document.getElementById('msgs');
   msgs.innerHTML = g.errs.map(m => `<div class="msg err">${m}</div>`).join('') +
                    g.warns.map(m => `<div class="msg warn">${m}</div>`).join('');
-  const btns = ['exportBtn', 'exportLidBtn', 'exportMagBtn'].map(id => document.getElementById(id));
+  const btns = ['exportAllBtn', 'exportCaret', 'exportMagBtn'].map(id => document.getElementById(id));
   if (g.errs.length) { btns.forEach(b => b.disabled = true); requestRender(); return; }
   btns.forEach(b => b.disabled = false);
 
@@ -2594,19 +2941,32 @@ function update() {
   current = g;
   boxTrisAll = built.shells.flat();
   lidTrisAll = lidBuilt ? lidBuilt.shells.flat() : null;
+  insTrisAll = lidBuilt && lidBuilt.insert ? lidBuilt.insert.flat() : null;   // tray insert: its own STL
   magTrisAll = g.lid && g.lid.fit === 'magnet' ? buildMagnetTest(state).flat() : null;
   if (gl) {
-    freeMesh(meshes.box); freeMesh(meshes.lid); freeMesh(meshes.mag);
+    freeMesh(meshes.box); freeMesh(meshes.lid); freeMesh(meshes.mag); freeMesh(meshes.ins);
     meshes.box = makeMesh(boxTrisAll);
     meshes.lid = lidTrisAll ? makeMesh(lidTrisAll) : null;
     meshes.mag = magTrisAll ? makeMesh(magTrisAll) : null;
+    meshes.ins = insTrisAll ? makeMesh(insTrisAll) : null;
+    buildPlate();
+    // Warn when the parts can't all print together on the chosen plate
+    const ex = [lidTrisAll && meshes.lid, insTrisAll && meshes.ins, magTrisAll && meshes.mag].filter(Boolean).map(m => ({ m }));
+    if (!layoutAround(meshes.box.b, ex).fits) {
+      const [PW, PD] = plateSize();
+      document.getElementById('msgs').insertAdjacentHTML('beforeend',
+        `<div class="msg warn">These parts don't all fit on one ${PW} × ${PD} mm plate. Print them on separate plates (or pick a bigger plate in View).</div>`);
+    }
   }
 
   // --- info panel ---
   const vol = meshVolume(boxTrisAll) / 1000; // cm^3
+  let allVol = vol;   // running total of every part that "Export all" saves
   const rows = [
     ['Outer size', `${fmt(g.hw * 2)} × ${fmt(g.hd * 2)} × ${fmt(g.Ho)}`],
     g.vase ? ['Inside', 'solid (vase mode)'] : ['Inner size', `${fmt(g.hw * 2 - 2 * g.t)} × ${fmt(g.hd * 2 - 2 * g.t)} × ${fmt(g.Ho - g.f)}`],
+    ['total', 'Filament (all parts)', ''],   // filled in below once every part is measured
+    ['total', 'Print time (all parts)', ''],
     ['Corner radius out / in', `${fmt(Math.max(g.rO, 0))} / ${fmt(Math.max(g.rO - g.t, 0))}`]
   ];
   if (state.stack === 'nest') {
@@ -2627,7 +2987,7 @@ function update() {
     const shown = [...built.labels, ...(lidBuilt ? lidBuilt.labels : [])].filter(l => l[1] > 0).map(l => `${l[0]} ${fmt(l[1])}`);
     if (shown.length) rows.push(['Label height (mm)', shown.join(', ')]);
   }
-  rows.push(['Box plastic', `≈ ${fmt(vol)} cm³ / ${fmt(vol * 1.24)} g PLA`]);
+  rows.push(['Box', partEst(vol)]);
   if (g.lid) {
     const L = g.lid, lv = meshVolume(lidTrisAll) / 1000;
     const grow = L.style === 'stack' ? L.to : 0;
@@ -2642,20 +3002,40 @@ function update() {
       rows.push(['Round opening', `Ø${fmt(L.tw.Rn * 2)} mm`]);
       rows.push(['Twist to lock', `≈30° clockwise, ${L.tw.N} lugs`]);
       rows.push(['Funnel under opening', `${fmt(g.Ho - L.tw.zFmin)} mm deep at the corners`]);
-      rows.push(['Squeeze when locked', `${fmt(Math.max(0, L.tw.ramp - L.tw.gTop))} mm`]);
+      const sq = L.tw.ramp - L.tw.gTop;
+      rows.push(['Squeeze when locked', sq > 0.001 ? `${fmt(sq)} mm` : `none (${fmt(-sq)} mm gap)`]);
+      if (L.stiff) rows.push(['Stiff lid allowance', `+${fmt(L.stiff.dZ)} mm above lugs, +${fmt(L.stiff.dR)} mm around plug`]);
       if (L.upsideDown) rows.push(['Tray floor bridge (print)', `${fmt(L.bridge)} mm`]);
+      if (L.insert) {
+        const s = L.ti - L.insert.c;
+        rows.push(['Tray insert', `${fmt(2 * (g.hw + s))} × ${fmt(2 * (g.hd + s))} × ${fmt(L.insert.t)} mm, ${fmt(L.insert.c)} mm gap per side`]);
+      }
     }
     if (L.fit === 'magnet') {
       rows.push(['Magnet holes', `Ø${fmt(L.rh * 2)} × ${fmt(L.md)} deep`]);
       rows.push(['Test piece holes', [-0.1, 0, 0.1].map(k => 'Ø' + fmt(state.magD + Math.max(0, state.magFit + k))).join(' / ')]);
     }
-    rows.push(['Lid plastic', `≈ ${fmt(lv)} cm³ / ${fmt(lv * 1.24)} g PLA`]);
+    rows.push(['Lid', partEst(lv)]);
+    allVol += lv;
   }
+  if (insTrisAll) {
+    const iv = meshVolume(insTrisAll) / 1000;
+    rows.push(['Tray insert', partEst(iv)]);
+    allVol += iv;
+  }
+  // Totals go in the top rows so they show even when the list is collapsed
+  rows[2][2] = `≈ ${Math.round(estGrams(allVol))} g PLA`;
+  rows[3][2] = `≈ ${fmtTime(estSeconds(allVol) + PREP_S)}`;
+  rows.push(['sep']);
+  rows.push(['Estimate based on', 'Bambu 0.20 mm Standard, PLA']);
+  rows.push(['Plate prep (heat, level)', `≈ ${fmtTime(PREP_S)}`]);
   rows.push(['Triangles', (boxTrisAll.length + (lidTrisAll ? lidTrisAll.length : 0)).toLocaleString()]);
-  document.getElementById('info').innerHTML = rows.map(([a, b]) =>
-    a === 'sep' ? '<div class="sep"></div>' : `<div><span>${a}</span><span>${b}</span></div>`).join('');
-  document.getElementById('fileName').textContent = fileBase() + '.stl';
-  document.getElementById('lidFileName').textContent = fileBase() + '_lid.stl';
+  document.getElementById('info').innerHTML = rows.map(r => {
+    if (r[0] === 'sep') return '<div class="sep"></div>';
+    if (r[0] === 'total') return `<div class="total"><span>${r[1]}</span><span>${r[2]}</span></div>`;
+    return `<div><span>${r[0]}</span><span>${r[1]}</span></div>`;
+  }).join('');
+  refreshExportMenu();
   document.getElementById('magFileName').textContent = `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`;
 
   drawEditor();
@@ -2664,13 +3044,106 @@ function update() {
   requestRender();
 }
 
-document.getElementById('exportBtn').addEventListener('click', () => { if (boxTrisAll) download(boxTrisAll, fileBase() + '.stl'); });
-document.getElementById('exportLidBtn').addEventListener('click', () => { if (lidTrisAll) download(lidTrisAll, fileBase() + '_lid.stl'); });
-document.getElementById('exportMagBtn').addEventListener('click', () => {
-  if (magTrisAll) download(magTrisAll, `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`);
+/* =====================================================================
+   EXPORT
+   One split button. The big part saves every part you've made (box,
+   plus lid and tray insert if they're on) as separate STL files. The
+   arrow opens a menu to save just one. The magnet test piece is in the
+   menu too, but not in "all", since you only need it once.
+   ===================================================================== */
+const magFile = () => `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`;
+// Every part that exists right now: [name, triangles, file name, included in "all"]
+function exportParts() {
+  const parts = [['Box', boxTrisAll, fileBase() + '.stl', true]];
+  if (lidTrisAll) parts.push(['Lid', lidTrisAll, fileBase() + '_lid.stl', true]);
+  if (insTrisAll) parts.push(['Tray insert', insTrisAll, fileBase() + '_lid_insert.stl', true]);
+  if (magTrisAll) parts.push(['Magnet test piece', magTrisAll, magFile(), false]);
+  return parts.filter(q => q[1]);
+}
+// One STL with every part laid out on the plate the same way the preview
+// shows them (box in the middle, lid and insert beside it, all in print
+// position). One file means one download, so the browser doesn't warn about
+// a site saving several files at once.
+// Gotcha: the slicer loads it as one object. That prints fine. To move parts
+// around on their own in Bambu Studio, right-click > Split > To objects.
+const combinedFile = () => fileBase() + '_all.stl';
+function combinedTris() {
+  const all = exportParts().filter(q => q[3]);
+  if (all.length < 2) return boxTrisAll;
+  const extras = [];
+  if (lidTrisAll && meshes.lid) extras.push({ m: meshes.lid, t: lidTrisAll });
+  if (insTrisAll && meshes.ins) extras.push({ m: meshes.ins, t: insTrisAll });
+  const lay = layoutAround(meshes.box.b, extras);
+  const move = (tris, o) => tris.map(tr => tr.map(v => [v[0] + o[0], v[1] + o[1], v[2]]));
+  let out = move(boxTrisAll, lay.shift);
+  lay.items.forEach((it, i) => { out = out.concat(move(extras[i].t, it.off)); });
+  return out;
+}
+const menu = document.getElementById('exportMenu'), caret = document.getElementById('exportCaret');
+function refreshExportMenu() {
+  const parts = exportParts(), all = parts.filter(q => q[3]);
+  document.getElementById('exportAllLabel').textContent = all.length > 1 ? `Export all (${all.length} parts, 1 file)` : 'Export box STL';
+  document.getElementById('exportSummary').textContent = all.length > 1 ? combinedFile() : all[0][2];
+  menu.innerHTML = '';
+  // Old behavior kept in the menu for anyone who wants each part as its own file
+  if (all.length > 1) {
+    const b = document.createElement('button');
+    b.className = 'menuItem';
+    b.innerHTML = `All parts as separate files<small>${all.length} downloads (browser may ask to allow)</small>`;
+    b.addEventListener('click', () => { exportSeparate(); closeMenu(); });
+    menu.appendChild(b);
+    menu.appendChild(Object.assign(document.createElement('div'), { className: 'menuSep' }));
+  }
+  parts.forEach(([name, , file, inAll], i) => {
+    if (!inAll && i > 0 && parts[i - 1][3]) menu.appendChild(Object.assign(document.createElement('div'), { className: 'menuSep' }));
+    const b = document.createElement('button');
+    b.className = 'menuItem';
+    b.innerHTML = `${name} only<small>${file}</small>`;
+    b.addEventListener('click', () => { exportOne(name); closeMenu(); });
+    menu.appendChild(b);
+  });
+}
+function exportOne(name) {
+  const q = exportParts().find(x => x[0] === name);
+  if (q) download(q[1], q[2]);
+}
+// Big button: everything in one STL (or just the box if that's all there is)
+document.getElementById('exportAllBtn').addEventListener('click', () => {
+  const all = exportParts().filter(q => q[3]);
+  if (all.length > 1) download(combinedTris(), combinedFile());
+  else download(all[0][1], all[0][2]);
 });
+// Several files in a row: a short pause between each so the browser keeps up.
+// (The first time, the browser may ask to allow multiple downloads. Say yes.)
+function exportSeparate() {
+  const all = exportParts().filter(q => q[3]);
+  all.forEach((q, i) => setTimeout(() => download(q[1], q[2]), i * 400));
+  toast(`Saving ${all.length} files. If your browser asks about multiple downloads, choose Allow.`, 3500);
+}
+function closeMenu() { menu.hidden = true; caret.setAttribute('aria-expanded', 'false'); }
+caret.addEventListener('click', e => {
+  e.stopPropagation();
+  menu.hidden = !menu.hidden;
+  caret.setAttribute('aria-expanded', String(!menu.hidden));
+});
+document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+document.getElementById('exportMagBtn').addEventListener('click', () => { if (magTrisAll) download(magTrisAll, magFile()); });
 
 /* ===== Start up ===== */
+// Load where you left off: a shared link wins, otherwise what this browser saved last time
+(function loadSaved() {
+  let o = settingsFromHash(), from = 'link';
+  if (!o) { from = 'saved'; try { o = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { o = null; } }
+  if (o) { applySettings(o); refreshControls(); if (from === 'link') setTimeout(() => toast('Loaded the box settings from this link.'), 400); }
+})();
+// If someone pastes a different settings link into this tab, load it
+window.addEventListener('hashchange', () => {
+  const o = settingsFromHash();
+  if (!o) return;
+  applySettings(JSON.parse(JSON.stringify(DEFAULTS))); applySettings(o);
+  refreshControls(); update(); fitView();
+});
 if (!gl) {
   document.getElementById('viewWrap').innerHTML =
     '<p style="padding:20px">Your browser has 3D (WebGL) turned off, so the preview can\'t show. Export still works.</p>';
