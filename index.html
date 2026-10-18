@@ -148,6 +148,8 @@
   #info span:first-child { color: var(--muted); }
   #info span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   #msgs { max-height: 150px; overflow-y: auto; }
+  .seg button.blocked, .chips button.blocked { opacity: 0.4; cursor: not-allowed; text-decoration: line-through; }
+  .blockNote { color: #8a5a00; }
   .tipBox { background: #eef6ff; color: #1d3f66; border: 1px solid #cfe2f7; border-radius: 8px; padding: 9px 11px; font-size: 12.5px; line-height: 1.45; margin-top: 8px; }
   .tipBox b { color: #12304f; }
   .tipBox ul { margin: 4px 0 0; padding-left: 18px; }
@@ -246,9 +248,19 @@
     <div id="paneBody">
       <!-- ===== Size ===== -->
       <section class="pane" data-pane="size">
-        <div class="seg" id="modeSeg"></div>
-        <p class="hint" id="modeHint"></p>
-        <div id="sizeFields"></div>
+        <div class="seg" id="sizeModeSeg"></div>
+        <div id="exactBox" style="margin-top:12px">
+          <div class="seg" id="modeSeg"></div>
+          <p class="hint" id="modeHint"></p>
+          <div id="sizeFields"></div>
+        </div>
+        <div id="gridBox" style="margin-top:12px">
+          <p class="hint" style="margin-top:0">Standard Gridfinity: 42 mm grid cells and 7 mm height units (counted from the bottom of the feet). The feet fit any Gridfinity baseplate.</p>
+          <div id="gridFields"></div>
+          <div class="sublabel">Magnet holes in the feet</div>
+          <div class="seg" id="gfMagSeg"></div>
+          <p class="hint">Standard 6 × 2 mm magnets, 4 per cell (6.5 mm holes, 2.4 mm deep, like other Gridfinity bins).</p>
+        </div>
       </section>
 
       <!-- ===== Walls & edges ===== -->
@@ -409,7 +421,7 @@
       </div>
       <div class="fileName" id="exportSummary"></div>
       <!-- Version lives here, small and out of the way -->
-      <div id="version">v2026.10.17.17</div>
+      <div id="version">v2026.10.18.04</div>
     </div>
   </div>
 
@@ -436,6 +448,9 @@
    measurements are millimeters, which is what Bambu Studio expects.
    ===================================================================== */
 const state = {
+  sizeMode: 'exact', // 'exact' (type mm sizes) | 'grid' (Gridfinity units)
+  gx: 2, gy: 2, gz: 6,   // Gridfinity: grid cells across, front to back, and 7 mm height units
+  gfMag: 'none',     // Gridfinity: 'none' | 'magnets' (standard 6 x 2 mm magnet holes in the feet)
   mode: 'inner',     // 'inner' = numbers describe the inside space, 'outer' = outside footprint
   w: 50, d: 50, h: 50,
   radius: 5,         // corner radius, applied to whichever side 'mode' is measuring
@@ -495,7 +510,7 @@ const state = {
   bumpLen: 12,         // snap: length of each side bump
   rimDepth: 3,         // stackable lid: how deep the tray is that the next box sits in
   magD: 6, magT: 3,    // magnet size
-  magFit: 0.15,        // extra hole diameter over the magnet (press fit)
+  magFit: 0,           // extra hole diameter over the magnet (0 = same as the magnet; most printers print holes a bit big already)
   twistLock: 0.35,     // twist lid: how far the slots ramp down at the end of the turn (more = tighter)
   trayInsert: 'none',  // stackable twist lid: 'none' | 'insert' (a thin plate that covers the tray floor)
   insertT: 1,          // insert thickness (the tray gets this much deeper)
@@ -781,6 +796,7 @@ const twistPlugDepth = () => TW_DIMS.lip + TW_DIMS.sd + TW_DIMS.hc + TW_DIMS.sd 
 //   magnets:                    locating plug, like the flat friction lid
 function lidDrop(p) {
   if (!p.lid || p.vase) return 0;
+  if (isGrid(p) && p.stack === 'gflip') return 0;   // the lid sits in the Gridfinity lip, above the box
   if (p.lidFit === 'magnet') return Math.max(p.plugDepth, p.magT + 1);   // locating plug (at least deep enough for the magnets)
   if (p.lidFit === 'twist') return twistPlugDepth();
   return p.plugDepth + (p.lidStyle === 'stack' ? p.lidClear : 0);
@@ -801,7 +817,7 @@ const vaseBottomLayers = p => (p.emboss && p.faces.bottom) ? Math.ceil(p.textDep
 function lidOutside(g) {
   const L = g.lid;
   if (!L) return { up: 0, grow: 0 };
-  const closed = L.style === 'stack' ? L.seat + L.zTop : g.Ho + L.lt;
+  const closed = L.style === 'stack' ? L.seat + L.zTop : g.Ho + (L.gfLip ? GF.lipH : 0) + L.lt;   // a lid in the Gridfinity lip sits on top of the lip
   return { up: closed - g.Ho, grow: L.style === 'stack' ? Math.max(0, L.to) : 0 };
 }
 
@@ -809,7 +825,40 @@ function lidOutside(g) {
 // lid included, so it fits the space you measured. Build it once to see how
 // much the lid adds, then shrink the box by that and build again. (Twice more,
 // since the lid's size can shift a hair when the box changes, e.g. nesting tapers.)
+/* ===== Gridfinity =====
+   Standard sizes (Zack Freedman's spec): 42 mm grid, boxes are 42 x units - 0.5 mm
+   (a little gap so they drop into a baseplate), heights in 7 mm units counted from the
+   bottom of the feet, 3.75 mm outside corner radius. Each grid cell gets its own foot
+   with the standard stepped profile, so the box fits any Gridfinity baseplate.
+   The box body is built like a normal box and then lifted onto the feet. */
+const GF = {
+  pitch: 42, gap: 0.5, unitH: 7, r: 3.75,
+  footH: 4.75,
+  // foot profile from the bottom up: [height, half-size, corner radius]
+  foot: [[0, 17.8, 0.8], [0.8, 18.6, 1.6], [2.6, 18.6, 1.6], [4.75, 20.75, 3.75]],
+  // stacking lip / lid pockets: the foot profile plus 0.25 mm clearance, cut off 0.35 mm
+  // below the knife edge so the top prints. [height above the seat, inset from the outside]
+  lip: [[0, 2.7], [0.8, 1.9], [2.6, 1.9], [4.15, 0.35]],
+  lipH: 4.15,
+  // baseplate-style pocket on a lid (per cell): [height above floor, inset from the 42 mm cell]
+  pocket: [[0, 2.85], [0.7, 2.15], [2.5, 2.15], [4.15, 0.5]],
+  pocketH: 4.15,
+  magR: 3.25, magDepth: 2.4, magOff: 13   // standard 6 x 2 mm magnet holes, 4 per foot
+};
+const isGrid = p => p.sizeMode === 'grid';
+
 function computeGeometry(p) {
+  if (isGrid(p)) {
+    // Gridfinity: the grid sets the outside size. Build the body (above the feet) as an
+    // outside-size box, with none of the "make room for the lid" adjustments.
+    const q = { ...p, mode: 'outer', w: GF.pitch * p.gx - GF.gap, d: GF.pitch * p.gy - GF.gap,
+                h: GF.unitH * p.gz - GF.footH, radius: GF.r, stack: 'none', gfLipLid: p.stack === 'gflip' };
+    const g = computeGeometryCore(q);
+    g.gf = { gx: p.gx, gy: p.gy, gz: p.gz, zBase: GF.footH, lip: p.stack === 'gflip', mag: p.gfMag === 'magnets' };
+    if (g.gf.lip) g.pitch = g.Ho + GF.footH - 0.25;   // the next box's feet rest on the lip's lowest 45° face, 0.25 below the unit height (the clearance)
+    if (g.gf.lip && p.divOn) g.divTop = g.Ho - p.divDrop - 0.5;   // dividers stay just below the lip's seat (a lid here sits in the lip, not in the box)
+    return g;
+  }
   let g = computeGeometryCore(p);
   if (p.mode !== 'outer' || !g.lid) return g;
   for (let i = 0; i < 3; i++) {
@@ -904,7 +953,8 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
   // --- lid ---
   g.groove = () => 0; g.grooveZ = []; g.lid = null; g.notch = null;
   if (p.lid && !vase) {
-    const L = { fit: p.lidFit, style: p.lidFit === 'magnet' ? 'flat' : p.lidStyle, c: p.lidClear, P: p.plugDepth,
+    const L = { fit: p.lidFit, style: p.lidFit === 'magnet' && !isGrid(p) ? 'flat' : p.lidStyle,   // magnet lids are flat, except the Gridfinity stackable one
+                c: p.lidClear, P: p.plugDepth,
                 lt: p.lidThick, pw: p.plugWall, b: p.lidFit === 'snap' ? p.snapBump : 0,
                 snapStyle: p.snapStyle, bumpLen: p.bumpLen };
     L.gd = L.P / 2;   // snap bump/groove sits halfway down the plug
@@ -933,7 +983,9 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
       if (L.lt > ltWanted + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the lid label.`);
       if (L.P < L.md + 0.8) { L.P = L.md + 0.8; warns.push(`Plug made ${fmt(L.P)} mm deep so the magnets fit in its corners.`); }
       L.gap = Math.max(0.2, L.c);            // space between the lid and box magnets when closed
-      L.zPost = Ho - L.P - L.gap;            // top of the box posts
+      // top of the box posts. The Gridfinity stackable magnet lid rests on the box's inner top edge
+      // with its flare, so its plug sits a clearance lower than a flat lid's.
+      L.zPost = Ho - L.P - (L.style === 'stack' ? L.c : 0) - L.gap;
       // Where the magnet goes: tucked into the corner as far as it can, but fully
       // inside the lid plug's wall (so the plug wall never cuts into the hole). That
       // leaves a full plug wall of plastic between the hole and the outside.
@@ -1018,6 +1070,11 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
       // A cut-in lid label needs solid lid under it, so thicken the lid if needed
       if (L.eTop || L.eUnder) L.lt = Math.max(L.lt, L.eTop + L.eUnder + 0.8);
       if (L.lt > ltWanted + 1e-9) warns.push(`Lid made ${fmt(L.lt)} mm thick to fit the lid label.`);
+      // Gridfinity box with the stacking lip: the lid's plug is shaped like the inside of
+      // the lip (like a box's feet, as one piece) and drops into it. The lid rests on the
+      // top of the lip, and the plug keeps it from sliding. Nothing goes down into the box.
+      if (p.gfLipLid) { L.gfLip = true; L.P = GF.lipH; L.lead = 0; L.bead = () => 0; L.b = 0; }
+      else {
       if (L.P < 1) errs.push('Plug depth must be at least 1 mm.');
       if (Ho - L.P - L.c < f + 1) errs.push('Lid plug is deeper than the inside of the box.');
       if (L.style === 'flat' && Math.min(hw, hd) + g.o(Ho - L.P) - t - L.c - L.pw < 1) errs.push('Plug walls leave no room inside the lid.');
@@ -1035,6 +1092,7 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
         L.bead = dd => b * Math.max(0, 1 - Math.abs(dd - L.gd) / b);   // dd = depth below the box top
       } else {
         L.bead = () => 0;
+      }
       }
     }
 
@@ -1060,6 +1118,25 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
       }
       L.zc = zc;
       L.zTop = Math.max(zc + p.rimDepth, L.zch + 0.6, L.lt + 1);
+      if (L.gfLip) {
+        // In the Gridfinity lip: plug from the lip's seat up to its top, then the lid,
+        // then the pocket grid. Built plug-down (it prints that way).
+        L.gf = true; L.to = 0; L.ti = 0;
+        L.seat = Ho;
+        L.zG = GF.lipH + L.lt;
+        L.zc = L.zG;
+        L.zTop = L.zG + GF.pocketH;
+      } else if (isGrid(p)) {
+        // Gridfinity stackable lid: no tray around the outside. The lid stays the box's
+        // size and its top is a grid of baseplate pockets, so any Gridfinity box (any size,
+        // in any cell) sits on it. The flare still rests on the box's inner top edge.
+        L.gf = true;
+        L.to = 0; L.ti = 0;
+        L.zch = L.P + (L.to - L.plugTop);
+        L.zG = Math.max(L.zch, L.P + L.lt);        // pocket floor
+        L.zc = L.zG;                               // where the next box's feet rest
+        L.zTop = L.zG + GF.pocketH;
+      }
     }
 
     // Pull tab, on any side or corner. Size is measured on the lid's outer edge.
@@ -1242,7 +1319,109 @@ function buildBox(g, p, raster) {
 
   // ---------- size labels ----------
   if (p.emboss) buildLabels(g, p, raster, shells, labels);
+  if (g.gf) buildGridfinity(g, shells);
   return { shells, labels };
+}
+
+// Gridfinity: stacking lip on top (optional), then lift everything onto the feet.
+function buildGridfinity(g, shells) {
+  const G = g.gf, t = g.t;
+  if (G.lip) {
+    // A ring on top of the wall: outside flush with the box, inside shaped like a baseplate
+    // so another box's feet drop in. The lowest 45° face carries on 0.6 mm below the seat
+    // (narrower than the bottom of a foot), so a foot comes to rest on it. Under that it
+    // slopes back out to the wall at 45°, so it prints without supports.
+    const lo = 0.6, insLo = GF.lip[0][1] + lo;              // narrowest point, 0.6 mm below the seat
+    const ledge = Math.max(0, insLo - t), zLo = g.Ho - lo, z0 = zLo - ledge - 0.05;
+    const outer = [z0, g.Ho + GF.lipH].map(z => ringAtInset(g, z, 0));
+    const inner = [[z0, -Math.min(t, insLo)]];
+    if (ledge > 0) inner.push([zLo - ledge, -t]);
+    inner.push([zLo, -insLo]);
+    for (const [h, ins] of GF.lip) inner.push([g.Ho + h, -ins]);
+    const innerRings = inner.reverse().map(([z, ins]) => ringAtInset(g, z, ins));
+    shells.push(stitch([...outer, ...innerRings, outer[0]]));
+  }
+  // Lift the box onto the feet
+  for (const sh of shells) for (const tri of sh) for (let k = 0; k < 3; k++) tri[k] = [tri[k][0], tri[k][1], tri[k][2] + G.zBase];
+  // One foot per grid cell
+  for (let i = 0; i < G.gx; i++) for (let j = 0; j < G.gy; j++) {
+    const cx = (i - (G.gx - 1) / 2) * GF.pitch, cy = (j - (G.gy - 1) / 2) * GF.pitch;
+    shells.push(...footShells(cx, cy, G.mag));
+  }
+}
+
+// One Gridfinity foot (it overlaps 0.05 mm up into the box floor so they fuse).
+// With magnets: 4 pockets open on the bottom, so the foot is built as 4 quarter
+// pieces up to the top of the pockets, and a solid piece above that.
+function footShells(cx, cy, mag) {
+  const F = [...GF.foot, [GF.footH + 0.05, 20.75, 3.75]];
+  const rr = (half, r) => roundedRing(half, half, r, 0).map(q => [q[0] + cx, q[1] + cy]);
+  const at = z => {   // half-size and radius of the foot at height z
+    for (let i = 0; i < F.length - 1; i++) {
+      const [z0, h0, r0] = F[i], [z1, h1, r1] = F[i + 1];
+      if (z <= z1 + 1e-9) { const k = z1 > z0 ? (z - z0) / (z1 - z0) : 0; return [h0 + (h1 - h0) * k, r0 + (r1 - r0) * k]; }
+    }
+    return [F[F.length - 1][1], F[F.length - 1][2]];
+  };
+  const ringAt = z => { const [h, r] = at(z); return roundedRing(h, h, r, z).map(q => [q[0] + cx, q[1] + cy, z]); };
+  if (!mag) return [stitch([{ c: [cx, cy, 0] }, ...F.map(f => ringAt(f[0])), { c: [cx, cy, F[F.length - 1][0]] }])];
+  const zH = GF.magDepth, out = [];
+  // solid upper part: from the pocket tops to the top of the foot
+  const up = uniq([zH, ...F.map(f => f[0]).filter(z => z > zH)]);
+  out.push(stitch([{ c: [cx, cy, zH] }, ...up.map(ringAt), { c: [cx, cy, up[up.length - 1]] }]));
+  // 4 quarters with a magnet pocket each
+  const zs = uniq([0, zH + 0.05, ...F.map(f => f[0]).filter(z => z < zH + 0.05)]);
+  for (const sx of [1, -1]) for (const sy of [1, -1]) {
+    const polyAt = z => { const [h, r] = at(z); return clipPoly(clipPoly(rr(h, r), 0, cx - sx * 0.01, sx > 0), 1, cy - sy * 0.01, sy > 0); };
+    const c = [cx + sx * GF.magOff, cy + sy * GF.magOff];
+    const polys = zs.map(polyAt);
+    let A = [];
+    for (let i = 0; i < 96; i++) A.push(2 * Math.PI * i / 96);
+    for (const poly of polys) for (const v of poly) { let a = Math.atan2(v[1] - c[1], v[0] - c[0]); if (a < 0) a += 2 * Math.PI; A.push(a); }
+    A = uniq(A.filter(a => a < 2 * Math.PI - 1e-4));
+    const O = (poly, z) => A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], z]; });
+    const H = z => A.map(a => [c[0] + GF.magR * Math.cos(a), c[1] + GF.magR * Math.sin(a), z]);
+    const rings = polys.map((poly, i) => O(poly, zs[i]));
+    out.push(stitch([...rings, H(zs[zs.length - 1]), H(0), rings[0]]));
+  }
+  return out;
+}
+
+// A solid with a round hole straight through it, whose outline (convex) can change
+// with height: polys[i] is the outline at zs[i]. Used for the bottoms of magnet lids.
+function holedLoft(polys, zs, c, rh) {
+  let A = [];
+  for (let i = 0; i < 96; i++) A.push(2 * Math.PI * i / 96);
+  for (const poly of polys) for (const v of poly) { let a = Math.atan2(v[1] - c[1], v[0] - c[0]); if (a < 0) a += 2 * Math.PI; A.push(a); }
+  A = uniq(A.filter(a => a < 2 * Math.PI - 1e-4));
+  const rings = polys.map((poly, i) => A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], zs[i]]; }));
+  const H = z => A.map(a => [c[0] + rh * Math.cos(a), c[1] + rh * Math.sin(a), z]);
+  return stitch([...rings, H(zs[zs.length - 1]), H(zs[0]), rings[0]]);
+}
+
+// Gridfinity lid top: one baseplate-style pocket per grid cell, standing on the
+// lid's top at z0. Each cell is a frame: outside = the cell's square (cut to the
+// lid's outline at the edges), inside = the pocket profile.
+function pocketFrames(g, z0) {
+  const G = g.gf, out = [], half = GF.pitch / 2;
+  const outline = roundedRing(g.hw, g.hd, g.rO, 0).map(q => [q[0], q[1]]);
+  for (let i = 0; i < G.gx; i++) for (let j = 0; j < G.gy; j++) {
+    const c = [(i - (G.gx - 1) / 2) * GF.pitch, (j - (G.gy - 1) / 2) * GF.pitch];
+    const sq = [[c[0] - half, c[1] - half], [c[0] + half, c[1] - half], [c[0] + half, c[1] + half], [c[0] - half, c[1] + half]];
+    const cell = clipConvex(outline, sq);
+    const prof = [[-0.05, GF.pocket[0][1]], ...GF.pocket];
+    const inner = prof.map(([h, ins]) => roundedRing(half - ins, half - ins, 4 - ins, 0).map(q => [q[0] + c[0], q[1] + c[1]]));
+    let A = [];
+    for (let k = 0; k < 96; k++) A.push(2 * Math.PI * k / 96);
+    for (const poly of [cell, ...inner]) for (const v of poly) { let a = Math.atan2(v[1] - c[1], v[0] - c[0]); if (a < 0) a += 2 * Math.PI; A.push(a); }
+    A = uniq(A.filter(a => a < 2 * Math.PI - 1e-4));
+    const ring = (poly, z) => A.map(a => { const q = rayConvex(poly, c, a); return [q[0], q[1], z]; });
+    const zb = z0 - 0.05, zt = z0 + GF.pocketH;
+    const ob = ring(cell, zb), ot = ring(cell, zt);
+    const ins = prof.map(([h], k) => ring(inner[k], z0 + h)).reverse();
+    out.push(stitch([ob, ot, ...ins, ob]));
+  }
+  return out;
 }
 
 // One corner post that holds a magnet just under the lid plug. The top is a block
@@ -1514,7 +1693,22 @@ function buildLid(g, p, raster) {
       }
       if (L.insert) insert = buildInsert(g, p, L, raster, labels);
     }
-  } else if (L.fit === 'magnet') {
+  } else if (L.gfLip && L.style === 'flat') {
+    // Flat lid for the Gridfinity lip, printed plate down. The plug is a ring whose outside
+    // follows the inside of the lip (plus the clearance) and narrows at 45° like a foot.
+    const eT = L.eTop, c = L.c;
+    const prof = [...GF.lip].reverse().map(([h, ins]) => [GF.lipH - h, ins + c]);   // [depth below the lip top, inset]
+    const list = [{ c: [0, 0, eT] }, ...bedEdge(L.lt - 0.3 - eT, eT), ring(L.lt, 0, 0)];
+    for (const [dd, ins] of prof) list.push(ring(L.lt + dd, 0, -ins));
+    for (const [dd, ins] of [...prof].reverse()) list.push(ring(L.lt + dd, 0, -ins - L.pw));
+    list.push({ c: [0, 0, L.lt] });
+    shells.push(stitch(list));
+    flatTopLabel(L.lt - 0.3 - eT);
+    if (L.lblUnder) {
+      const m = GF.lip[0][1] + c + L.pw + 1.5;
+      labels.push(['Lid underside', raiseFace(shells, raster(2 * (g.hw - m), 2 * (g.hd - m), 0), L.lt, p.textDepth, mapPlain)]);
+    }
+  } else if (L.fit === 'magnet' && L.style === 'flat') {
     // Magnet lid: the flat friction lid's plate and plug (a loose locating lip, no bumps),
     // plus a solid block in each corner of the plug with a magnet pocket in its tip.
     // Printed plate down, so the pockets face up and need no bridges.
@@ -1579,8 +1773,46 @@ function buildLid(g, p, raster) {
     if (L.b) { const zb = L.P + L.c - L.gd; zs.push(zb - L.b, zb, zb + L.b); }
     for (const [z] of g.outer) { const zl = z - L.seat; if (zl > 0 && zl < L.P) zs.push(zl); }
     zs = uniq(zs.filter(z => z >= eU && z <= L.P));
+    if (L.gfLip) {
+      // Stackable lid for the Gridfinity lip, printed plug down: plug shaped like the inside
+      // of the lip (widening at 45° going up, so no supports), a flat underside that rests on
+      // top of the lip, the lid, then the pocket grid on top.
+      const prof = GF.lip.map(([h, ins]) => [h, ins + L.c]);
+      const list = [{ c: [0, 0, 0] }, ...prof.map(([h, ins]) => ring(h, 0, -ins)), ring(GF.lipH, 0, 0), ring(L.zG, 0, 0), { c: [0, 0, L.zG] }];
+      shells.push(stitch(list));
+      shells.push(...pocketFrames(g, L.zG));
+      return { shells, labels, insert };
+    }
     const list = [{ c: [0, 0, eU] }];
     for (const zl of zs) list.push(plugRing(zl, g.o(L.seat + zl), -t - L.c - lead(zl), bead(zl)));   // plug
+    if (L.gf && L.fit === 'magnet') {
+      // Gridfinity stackable magnet lid, printed plug down. The magnet pockets open on the
+      // bed side (only a 6 mm bridge over each one). So the bottom of the plug, up to the
+      // pocket tops, is 4 quarter pieces with a pocket each; the solid lid starts above that.
+      const zM = L.md;
+      const plug2d = zl => plugRing(zl, g.o(L.seat + zl), -t - L.c - lead(zl), 0).map(q => [q[0], q[1]]);
+      list.length = 0;
+      list.push({ c: [0, 0, zM] }, plugRing(zM, g.o(L.seat + zM), -t - L.c - lead(zM), 0));
+      for (const zl of zs) if (zl > zM + 1e-6) list.push(plugRing(zl, g.o(L.seat + zl), -t - L.c - lead(zl), 0));
+      const [cx, cy] = L.mc, zq = uniq([0, L.lead, zM + 0.05].filter(z => z <= zM + 0.05));
+      for (const sx of [1, -1]) for (const sy of [1, -1])
+        shells.push(holedLoft(zq.map(z => clipPoly(clipPoly(plug2d(z), 0, -sx * 0.01, sx > 0), 1, -sy * 0.01, sy > 0)), zq, [sx * cx, sy * cy], L.rh));
+    }
+    if (L.gf) {
+      // Gridfinity lid: plug, flare out to the box's size, flat top, then the pocket grid on it
+      list.push(ring(L.zch, 0, 0));
+      if (L.zG > L.zch + 1e-6) list.push(ring(L.zG, 0, 0));
+      list.push({ c: [0, 0, L.zG] });
+      shells.push(stitch(list));
+      shells.push(...pocketFrames(g, L.zG));
+      if (eU) {
+        const o = g.o(L.seat), surf = -t - L.c - lead(0);
+        const hx = g.hw + o + surf, hy = g.hd + o + surf, r = g.R(surf, o);
+        const poly = roundedRing(hx, hy, r, 0).map(q => [q[0], q[1]]);
+        labels.push(['Lid underside', engraveFace(shells, raster, poly, hx, hy, r, 0, eU + 0.05, mapFlipX)]);
+      }
+      return { shells, labels, insert };
+    }
     list.push(ring(L.zch, 0, L.to), ring(L.zTop, 0, L.to));                                          // flare + tray outside
     // Inside: tray, then narrowing to keep at least one wall thickness through the flare and plug
     const zi = [L.zTop, L.zch, ...zs];
@@ -1793,7 +2025,7 @@ function buildMagnetTest(p) {
   const D = p.magD, md = p.magT + 0.2, H = md + 1.2, rs = Math.max(0.8, Math.min(1.5, D * 0.2));
   const S = D + 0.35 + 2 * 2.4, shells = [];
   for (let k = 0; k < 3; k++) {
-    const a = Math.max(0, p.magFit + (k - 1) * 0.1), rh = (D + a) / 2, cx = (k - 1) * S;
+    const a = p.magFit + (k - 1) * 0.1, rh = (D + a) / 2, cx = (k - 1) * S;   // 0.1 tighter / as set / 0.1 looser (can go below the magnet size)
     const x0 = cx - S / 2 - EPS, x1 = cx + S / 2 + EPS, y0 = -S / 2, y1 = S / 2;
     const poly = k === 0 ? [[x0, y0], [x1, y0], [x1, y1], [x0 + 2.5, y1], [x0, y1 - 2.5]]
                          : [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -1872,7 +2104,10 @@ function makeRaster(lines, fontKey, textH) {
 // Size label: the numbers you typed plus ID (inside dimensions) or OD (outside
 // dimensions). ID/OD instead of IN/OUT because "IN" reads like inches. No "mm",
 // it's assumed for 3D prints and keeps the label short.
-function autoLabel() { return `${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)} ${state.mode === 'inner' ? 'ID' : 'OD'}`; }
+function autoLabel() {
+  if (isGrid(state)) return `${state.gx}x${state.gy}x${state.gz} GF`;   // Gridfinity units, e.g. "2x3x6 GF"
+  return `${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)} ${state.mode === 'inner' ? 'ID' : 'OD'}`;
+}
 // The label's lines: line 1 is the size, or your text in Custom mode; line 2 is optional
 function labelLines() {
   const l1 = state.labelMode === 'custom' && state.labelText.trim() ? state.labelText.trim() : autoLabel();
@@ -1915,6 +2150,7 @@ function triNormal(a, b, c) {
 function fileBase() {
   const d = new Date();
   const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  if (isGrid(state)) return `${date}_${state.gx}x${state.gy}x${state.gz}_gridfinity`;
   return `${date}_${fmt(state.w)}x${fmt(state.d)}x${fmt(state.h)}_${state.mode}`;
 }
 
@@ -2052,6 +2288,105 @@ function initGL() {
      this holds up well; big solid blocks will run longer than shown.
    Expect it to be within about 10-15% of what the slicer says. */
 const PLA_DENSITY = 1.24, FILL_FACTOR = 0.94, SEC_PER_CM3 = 81.6, PREP_S = 421;
+
+/* Better estimate: a rough "slice" of the part. We cut it into 0.5 mm cubes
+   (shooting a line up through every 0.5 mm spot and seeing where it's inside
+   the part, which also works where pieces overlap), then sort the cubes into:
+     shell    = near a surface: walls (about 2 lines) and top/bottom layers,
+                which the slicer prints solid
+     interior = deep inside thick parts (feet, solid lids), which the slicer
+                fills with 15% sparse infill
+   Plastic = shell + 15% of interior, times a small packing factor. Tuned
+   against two Bambu Studio slices (P2S, 0.20 mm Standard, PLA): a 50 mm box
+   with a snap lid (38.1 g, 44.5 min) and a 2x2x6 Gridfinity box with a
+   stackable magnet lid (77.5 g, 1 h 34 min). */
+const SLICE_H = 0.5, SLICE_INFILL = 0.15, SLICE_PACK = 1.014, SLICE_SEC = 90;   // mm, sparse infill, fudge, seconds per cm³ printed
+function slicedVolume(tris) {
+  const h = SLICE_H;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const t of tris) for (const v of t) {
+    if (v[0] < x0) x0 = v[0]; if (v[0] > x1) x1 = v[0];
+    if (v[1] < y0) y0 = v[1]; if (v[1] > y1) y1 = v[1];
+    if (v[2] < z0) z0 = v[2]; if (v[2] > z1) z1 = v[2];
+  }
+  const NX = Math.ceil((x1 - x0) / h) + 1, NY = Math.ceil((y1 - y0) / h) + 1, NZ = Math.ceil((z1 - z0) / h) + 1;
+  // Where each up-going line crosses the surface: height, and +1 going in / -1 going out
+  const hits = Array.from({ length: NX * NY }, () => []);
+  for (const [a, b, c] of tris) {
+    const nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);   // 2x the area seen from above, signed
+    if (Math.abs(nz) < 1e-12) continue;
+    const i0 = Math.max(0, Math.ceil((Math.min(a[0], b[0], c[0]) - x0) / h - 0.5)), i1 = Math.min(NX - 1, Math.floor((Math.max(a[0], b[0], c[0]) - x0) / h - 0.5));
+    const j0 = Math.max(0, Math.ceil((Math.min(a[1], b[1], c[1]) - y0) / h - 0.5)), j1 = Math.min(NY - 1, Math.floor((Math.max(a[1], b[1], c[1]) - y0) / h - 0.5));
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const px = x0 + (i + 0.5) * h, py = y0 + (j + 0.5) * h;
+      const w0 = ((b[0] - px) * (c[1] - py) - (b[1] - py) * (c[0] - px)) / nz;
+      const w1 = ((c[0] - px) * (a[1] - py) - (c[1] - py) * (a[0] - px)) / nz;
+      const w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      hits[i * NY + j].push(w0 * a[2] + w1 * b[2] + w2 * c[2], nz < 0 ? 1 : -1);
+    }
+  }
+  // Fill the cubes that are inside anything
+  const vox = new Uint8Array(NX * NY * NZ), at = (i, j, k) => (i * NY + j) * NZ + k;
+  for (let col = 0; col < NX * NY; col++) {
+    const H = hits[col];
+    if (!H.length) continue;
+    const ev = [];
+    for (let q = 0; q < H.length; q += 2) ev.push([H[q], H[q + 1]]);
+    ev.sort((p, q) => p[0] - q[0]);
+    let w = 0, start = 0;
+    for (const [z, d] of ev) {
+      const was = w > 0; w += d;
+      if (!was && w > 0) start = z;
+      else if (was && w <= 0) {
+        for (let k = Math.max(0, Math.ceil((start - z0) / h - 0.5)); k < NZ && z0 + (k + 0.5) * h < z; k++) vox[col * NZ + k] = 1;
+      }
+    }
+  }
+  // Shell or interior: interior needs solid 1 mm to each side, 1 mm above (top layers) and 0.5 mm below
+  let shell = 0, inner = 0;
+  const s = v => v ? 1 : 0;
+  for (let i = 0; i < NX; i++) for (let j = 0; j < NY; j++) for (let k = 0; k < NZ; k++) {
+    if (!vox[at(i, j, k)]) continue;
+    let deep = i >= 2 && i < NX - 2 && j >= 2 && j < NY - 2 && k >= 1 && k < NZ - 2;
+    if (deep) for (const [di, dj, dk] of [[1,0,0],[2,0,0],[-1,0,0],[-2,0,0],[0,1,0],[0,2,0],[0,-1,0],[0,-2,0],[0,0,1],[0,0,2],[0,0,-1]])
+      if (!vox[at(i + di, j + dj, k + dk)]) { deep = false; break; }
+    if (deep) inner++; else shell++;
+  }
+  const c = h * h * h / 1000;
+  return { shell: shell * c, inner: inner * c };
+}
+const printedCm3 = sv => SLICE_PACK * (sv.shell + SLICE_INFILL * sv.inner);
+// The rough slice takes a moment on big parts, so it runs once you stop dragging a
+// slider, and each part's result is kept until that part changes.
+const sliceCache = new WeakMap();
+let estTimer = null;
+function renderInfo(rows) {
+  document.getElementById('info').innerHTML = rows.map(r => {
+    if (r[0] === 'sep') return '<div class="sep"></div>';
+    if (r[0] === 'total') return `<div class="total"><span>${r[1]}</span><span>${r[2]}</span></div>`;
+    return `<div><span>${r[0]}</span><span>${typeof r[1] === 'object' ? '…' : r[1]}</span></div>`;
+  }).join('');
+}
+function showEstimates(rows) {
+  clearTimeout(estTimer);
+  estTimer = setTimeout(() => {
+    let cm3 = 0;
+    for (const r of rows) {
+      if (!r[1] || typeof r[1] !== 'object') continue;
+      const tris = r[1].est;
+      if (!sliceCache.has(tris)) sliceCache.set(tris, printedCm3(slicedVolume(tris)));
+      const v = sliceCache.get(tris);
+      cm3 += v;
+      r[1] = `≈ ${fmt(printedGrams(v))} g · ${fmtTime(printedSeconds(v))}`;
+    }
+    rows[2][2] = `≈ ${Math.round(printedGrams(cm3))} g PLA`;
+    rows[3][2] = `≈ ${fmtTime(printedSeconds(cm3) + PREP_S)}`;
+    renderInfo(rows);
+  }, 250);
+}
+const printedGrams = v => v * 1.26;          // Bambu's PLA density
+const printedSeconds = v => v * SLICE_SEC;
 const estGrams = v => v * PLA_DENSITY * FILL_FACTOR;
 /* Vase mode is different: the slicer prints one wide wall plus a few solid
    bottom layers, not the solid block in the STL. So we measure the outside
@@ -2146,16 +2481,17 @@ function sceneObjects() {
   objs.push({ m: meshes.box, off: [0, 0, 0], flip: 1, alpha: 1, color: base });
   const hasLid = state.lid && g.lid && meshes.lid;
   const lidOn = hasLid && state.lidView === 'on';
+  const zb = g.gf ? g.gf.zBase : 0;   // Gridfinity: the box body sits on its feet
   if (hasLid) {
     if (lidOn) {
       // Flat and magnet lids print upside down, so flip them over to sit them on the box
       // Lids that print upside down get flipped over to sit them on the box
-      if (g.lid.style === 'flat') objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.lt], flip: -1, alpha: 1, color: light });
+      if (g.lid.style === 'flat') objs.push({ m: meshes.lid, off: [0, 0, zb + g.Ho + (g.lid.gfLip ? GF.lipH : 0) + g.lid.lt], flip: -1, alpha: 1, color: light });
       else if (g.lid.upsideDown) {
-        objs.push({ m: meshes.lid, off: [0, 0, g.Ho + g.lid.zTop], flip: -1, alpha: 1, color: light });
-        if (meshes.ins) objs.push({ m: meshes.ins, off: [0, 0, g.Ho + g.lid.lt], flip: 1, alpha: 1, color: dark });   // sitting in the tray
+        objs.push({ m: meshes.lid, off: [0, 0, zb + g.Ho + g.lid.zTop], flip: -1, alpha: 1, color: light });
+        if (meshes.ins) objs.push({ m: meshes.ins, off: [0, 0, zb + g.Ho + g.lid.lt], flip: 1, alpha: 1, color: dark });   // sitting in the tray
       }
-      else objs.push({ m: meshes.lid, off: [0, 0, g.lid.seat], flip: 1, alpha: 1, color: light });
+      else objs.push({ m: meshes.lid, off: [0, 0, zb + g.lid.seat], flip: 1, alpha: 1, color: light });
     }
   }
   // Everything else is laid out around the box in print position, on the build plate
@@ -2170,7 +2506,7 @@ function sceneObjects() {
   if (state.preview) {
     const [sx, sy] = lay.shift;
     if (lidOn) {
-      if (g.lid.style === 'stack') objs.push({ m: meshes.box, off: [sx, sy, g.lid.seat + g.lid.zc], flip: 1, alpha: 0.35, color: base });
+      if (g.lid.style === 'stack') objs.push({ m: meshes.box, off: [sx, sy, zb + g.lid.seat + g.lid.zc], flip: 1, alpha: 0.35, color: base });
     } else if (g.pitch) {
       for (let k = 1; k <= 2; k++) objs.push({ m: meshes.box, off: [sx, sy, g.pitch * k], flip: 1, alpha: 0.35, color: base });
     }
@@ -2186,7 +2522,8 @@ const PART_GAP = 8;
 function layoutAround(boxB, items) {
   const [PW, PD] = plateSize();
   const placed = [[boxB[0], boxB[1], boxB[2], boxB[3]]], out = [];
-  const hits = r => placed.some(q => r[0] < q[1] + PART_GAP && r[1] > q[0] - PART_GAP && r[2] < q[3] + PART_GAP && r[3] > q[2] - PART_GAP);
+  const E = 1e-6;   // tolerance, so parts placed exactly side by side don't count as touching
+  const hits = r => placed.some(q => r[0] < q[1] + PART_GAP - E && r[1] > q[0] - PART_GAP + E && r[2] < q[3] + PART_GAP - E && r[3] > q[2] - PART_GAP + E);
   const groupWith = r => placed.concat([r]).reduce((g, q) => [Math.min(g[0], q[0]), Math.max(g[1], q[1]), Math.min(g[2], q[2]), Math.max(g[3], q[3])], [Infinity, -Infinity, Infinity, -Infinity]);
   // smaller is better: first how far past the plate it goes, then how big the group gets
   const score = gb => { const w = gb[1] - gb[0], d = gb[3] - gb[2]; return Math.max(0, w - PW) * 1e6 + Math.max(0, d - PD) * 1e6 + w * d; };
@@ -2400,15 +2737,16 @@ const sliders = {};
 function addSlider(parentId, key, label, min, max, step, unit = 'mm') {
   const wrap = document.createElement('div');
   wrap.className = 'field';
+  const lo = Math.min(0, min);   // typed numbers can't go below 0, unless the slider itself goes negative
   wrap.innerHTML = `<div class="row"><label>${label}</label>
-    <span class="num"><input type="number" min="0" step="${step}"><em>${unit}</em></span></div>
+    <span class="num"><input type="number" min="${lo}" step="${step}"><em>${unit}</em></span></div>
     <input type="range" min="${min}" max="${max}" step="${step}">`;
   const num = wrap.querySelector('input[type=number]'), rng = wrap.querySelector('input[type=range]');
   num.value = state[key]; rng.value = state[key];
   rng.addEventListener('input', () => { state[key] = +rng.value; num.value = rng.value; update(); });
   num.addEventListener('input', () => {
     const v = parseFloat(num.value);
-    if (isFinite(v) && v >= 0) { state[key] = v; rng.value = v; update(); }
+    if (isFinite(v) && v >= lo) { state[key] = v; rng.value = v; update(); }
   });
   document.getElementById(parentId).appendChild(wrap);
   sliders[key] = { wrap, set: v => { state[key] = v; num.value = v; rng.value = v; } };
@@ -2416,7 +2754,7 @@ function addSlider(parentId, key, label, min, max, step, unit = 'mm') {
 
 // Pick-one button group. segs[key].set(v) lets code switch it (e.g. dividers flip to Custom when you drag).
 const segs = {};
-const REFIT = ['lidView', 'lidStyle', 'lidMode', 'shape', 'previewSel', 'plate'];   // these change what's on screen, so re-frame the view
+const REFIT = ['lidView', 'lidStyle', 'lidMode', 'shape', 'previewSel', 'plate', 'sizeMode', 'stack'];   // these change what's on screen, so re-frame the view
 function addSegmented(id, key, options, onChange) {
   const el = document.getElementById(id), btns = [];
   options.forEach(([val, text]) => {
@@ -2432,14 +2770,18 @@ function addSegmented(id, key, options, onChange) {
     });
     el.appendChild(b); btns.push(b);
   });
-  segs[key] = { vals: options.map(o => o[0]), set: v => { state[key] = v; btns.forEach(b => b.classList.toggle('active', b.dataset.val === v)); } };
+  const note = Object.assign(document.createElement('p'), { className: 'hint blockNote' });
+  el.after(note);
+  segs[key] = { vals: options.map(o => o[0]), btns, note, set: v => { state[key] = v; btns.forEach(b => b.classList.toggle('active', b.dataset.val === v)); } };
 }
 
 // Pick-any chips. chipSets remembers them so a reset/load can refresh which are lit.
 const chipSets = [];
 function addChips(id, obj, options) {
   const el = document.getElementById(id);
-  chipSets.push({ obj, el });
+  const note = Object.assign(document.createElement('p'), { className: 'hint blockNote' });
+  el.after(note);
+  chipSets.push({ id, obj, el, note });
   options.forEach(([val, text]) => {
     const b = document.createElement('button');
     b.textContent = text;
@@ -2466,6 +2808,11 @@ function syncDerived() {
   state.cut = state.cutSel === 'on';
 }
 
+addSegmented('sizeModeSeg', 'sizeMode', [['exact', 'Exact'], ['grid', 'Gridfinity']]);
+addSlider('gridFields', 'gx', 'Width (42 mm cells)', 1, 8, 1, '');
+addSlider('gridFields', 'gy', 'Depth (42 mm cells)', 1, 8, 1, '');
+addSlider('gridFields', 'gz', 'Height (7 mm units)', 2, 20, 1, '');
+addSegmented('gfMagSeg', 'gfMag', [['none', 'None'], ['magnets', '6 × 2 mm magnets']]);
 addSegmented('modeSeg', 'mode', [['inner', 'Inside (ID)'], ['outer', 'Outside (OD)']]);
 addSlider('sizeFields', 'w', 'Width (X)', 5, 250, 0.5);
 addSlider('sizeFields', 'd', 'Depth (Y)', 5, 250, 0.5);
@@ -2479,7 +2826,8 @@ addChips('edgeChips', state.edges, [['bottom', 'Bottom edge'], ['topOuter', 'Top
 addSegmented('edgeStyleSeg', 'edgeStyle', [['fillet', 'Round'], ['chamfer', 'Bevel 45°']]);
 addSlider('edgeFields', 'edgeSize', 'Edge size', 0.2, 10, 0.1);
 
-addSegmented('stackSeg', 'stack', [['none', 'None'], ['nest', 'Nest (cups)'], ['lip', 'Lip (bricks)']]);
+addSegmented('stackSeg', 'stack', [['none', 'None'], ['nest', 'Nest (cups)'], ['lip', 'Lip (bricks)'], ['gflip', 'Gridfinity lip']],
+  v => { if (v === 'gflip' && state.lidMode === 'friction') sliders.lidClear.set(0.25); });   // lid in the lip: standard Gridfinity 0.25 mm gap
 addSlider('nestFields', 'taper', 'Taper per side', 0, 30, 0.5);
 addSlider('lipFields', 'foot', 'Foot height', 1, 20, 0.5);
 addSlider('lipFields', 'clear', 'Fit clearance', 0, 1, 0.05);
@@ -2508,7 +2856,7 @@ document.getElementById('labelLine2').addEventListener('input', e => { state.lab
 
 // Switching fit type loads a sensible starting clearance
 addSegmented('lidModeSeg', 'lidMode', [['none', 'None'], ['friction', 'Friction'], ['snap', 'Snap'], ['twist', 'Twist'], ['magnet', 'Magnets']],
-  v => { const c = { friction: 0.15, snap: 0.25, twist: 0.3, magnet: 0.25 }[v]; if (c !== undefined) sliders.lidClear.set(c); });
+  v => { const c = { friction: isGrid(state) && state.stack === 'gflip' ? 0.25 : 0.15, snap: 0.25, twist: 0.3, magnet: 0.25 }[v]; if (c !== undefined) sliders.lidClear.set(c); });   // in the Gridfinity lip: the standard 0.25 mm gap
 addSlider('twistFields', 'twistLock', 'Lock tightness', 0, 1, 0.05);
 addSegmented('insSeg', 'trayInsert', [['none', 'None'], ['insert', 'Insert (glue or press fit)']]);
 addSlider('insFields', 'insertT', 'Insert thickness', 0.6, 3, 0.1);
@@ -2524,7 +2872,7 @@ addSlider('snapFields', 'snapBump', 'Bump height', 0.2, 1.5, 0.05);
 addSlider('snapFields', 'bumpLen', 'Bump length', 3, 60, 0.5);
 addSlider('magFields', 'magD', 'Magnet diameter', 2, 25, 0.5);
 addSlider('magFields', 'magT', 'Magnet thickness', 1, 10, 0.5);
-addSlider('magFields', 'magFit', 'Hole extra (diameter)', 0, 0.6, 0.05);
+addSlider('magFields', 'magFit', 'Hole extra (diameter)', -0.4, 0.6, 0.05);   // negative = tighter than the magnet, for printers that print holes big
 // Tab position picker laid out like a top view of the lid: back row on top, front row on the bottom
 addSegmented('tabPick', 'tabPos', [['bl', 'Back left'], ['back', 'Back'], ['br', 'Back right'],
   ['left', 'Left'], ['none', 'None'], ['right', 'Right'],
@@ -2553,7 +2901,7 @@ document.getElementById('colorPick').addEventListener('input', e => { state.colo
    ===================================================================== */
 // Which settings belong to which top bar section (used by the Reset button)
 const SECTIONS = {
-  size:  ['mode', 'w', 'd', 'h', 'radius'],
+  size:  ['sizeMode', 'gx', 'gy', 'gz', 'gfMag', 'mode', 'w', 'd', 'h', 'radius'],
   walls: ['wall', 'floor', 'shape', 'edges', 'edgeStyle', 'edgeSize'],
   stack: ['stack', 'taper', 'foot', 'clear'],
   div:   ['divMode', 'divCols', 'divRows', 'divXs', 'divYs', 'divOff', 'divThick', 'divDrop'],
@@ -2984,8 +3332,101 @@ const badge = (id, text) => {
   tab.title = text ? `${name}: ${text}` : name;
 };
 
+/* =====================================================================
+   WHAT WORKS WITH WHAT
+   Some features can't work together (a Gridfinity box has feet where drain
+   holes would go, a lid and a stacking lip both want the top of the box...).
+   Those buttons are greyed out with the reason underneath. If one that's
+   switched on becomes impossible, it gets switched off and a note says why.
+   ===================================================================== */
+function blockedOptions() {
+  const S = state, G = isGrid(S), lidOn = S.lidMode !== 'none' && S.shape !== 'vase';
+  const seg = {}, chip = {};
+  const no = (map, key, vals, why) => { map[key] = map[key] || {}; for (const v of vals) if (!map[key][v]) map[key][v] = why; };
+  const LIDS = ['friction', 'snap', 'twist', 'magnet'], TABS = ['bl', 'back', 'br', 'left', 'right', 'fl', 'front', 'fr'];
+  const WALLS = ['front', 'back', 'left', 'right'];
+  if (G) {
+    no(seg, 'shape', ['vase'], 'Not for Gridfinity: the feet need a real floor above them.');
+    no(seg, 'stack', ['nest', 'lip'], 'Gridfinity boxes stand on feet, so they can\'t nest or use the brick foot. Use the Gridfinity lip to stack them.');
+    no(seg, 'drainSel', ['one', 'grid'], 'Not for Gridfinity: the feet cover the bottom.');
+    no(chip, 'edgeChips', ['bottom'], 'Gridfinity feet are the bottom edge.');
+    no(chip, 'faceChips', ['bottom'], 'Gridfinity feet are on the bottom. Use the floor or the lid.');
+    no(chip, 'faceChips', WALLS, 'Raised text on the outside would stop Gridfinity boxes sitting side by side in the grid.');
+    no(seg, 'tabPos', TABS, 'Tabs stick out past the 42 mm grid and would hit the box next to it. Use the finger notch.');
+    if (S.lidMode === 'twist') no(seg, 'lidStyle', ['stack'], 'The stackable twist lid isn\'t made for Gridfinity. Friction and Snap stackable lids get Gridfinity pockets on top.');
+    if (lidOn && S.lidStyle === 'stack' && S.lidMode !== 'twist')
+      no(chip, 'faceChips', ['lidTop'], 'The Gridfinity pockets cover the top of this lid. Use the lid underside.');
+    if (lidOn && S.lidStyle === 'stack' && S.lidMode === 'magnet')
+      no(chip, 'faceChips', ['lidUnder'], 'The magnet pockets are on the underside of this lid.');
+  } else {
+    no(seg, 'stack', ['gflip'], 'Only for Gridfinity boxes (Size tab).');
+  }
+  if (G && S.stack === 'gflip') {
+    no(seg, 'lidMode', ['snap', 'twist', 'magnet'], 'With the Gridfinity lip, the lid drops into the lip (Friction). Snap, Twist and Magnets need a plain box top: set Stacking to None.');
+    no(chip, 'edgeChips', ['topOuter', 'topInner'], 'The Gridfinity stacking lip is the top edge.');
+    no(seg, 'notchSide', ['front', 'back', 'left', 'right'], 'The finger notch can\'t cut through the Gridfinity lip.');
+    if (lidOn && S.lidStyle === 'stack') no(chip, 'faceChips', ['lidUnder'], 'The bottom of this lid is the plug that sits in the lip.');
+  }
+  if (G && lidOn && S.lidMode !== 'friction') no(seg, 'stack', ['gflip'], 'Only a Friction lid fits in the Gridfinity lip. Snap, Twist and Magnets need a plain box top.');
+  if (S.shape === 'vase') {
+    no(seg, 'lidMode', LIDS, 'No lids in vase mode (the box is a solid block).');
+    no(seg, 'drainSel', ['one', 'grid'], 'Off in vase mode (the box is a solid block).');
+    no(seg, 'divMode', ['grid', 'custom'], 'Off in vase mode (the box is a solid block).');
+    no(chip, 'faceChips', ['floor'], 'No inside floor in vase mode.');
+    no(chip, 'edgeChips', ['topInner', 'scoop'], 'No inside edges in vase mode.');
+  }
+  if (S.drainSel !== 'none') no(chip, 'faceChips', ['bottom', 'floor'], 'Drain holes are in the way. Pick a wall or the lid.');
+  if (S.stack === 'nest') {
+    no(chip, 'faceChips', WALLS, 'Raised text on the outside stops boxes nesting. Floor and Bottom are safe.');
+    no(seg, 'lidMode', ['twist'], 'The twist lid\'s round neck stops boxes nesting.');
+    no(seg, 'lidMode', ['magnet'], 'The magnet posts in the corners stop boxes nesting.');
+  }
+  if (lidOn && S.lidMode === 'twist') no(seg, 'stack', ['nest'], 'The twist lid\'s round neck stops boxes nesting.');
+  if (lidOn && S.lidMode === 'magnet') no(seg, 'stack', ['nest'], 'The magnet posts in the corners stop boxes nesting.');
+  return { seg, chip };
+}
+
+// Grey out what can't be used, and switch off anything picked that can't work.
+function applyBlocks() {
+  const { seg, chip } = blockedOptions(), offed = [];
+  for (const key in segs) {
+    const B = seg[key] || {}, S = segs[key];
+    if (B[state[key]]) {
+      const fall = ['none', 'open', 'flat', 'off'].find(v => S.vals.includes(v) && !B[v]) || S.vals.find(v => !B[v]);
+      offed.push(B[state[key]]);
+      S.set(fall);
+    }
+  }
+  for (const c of chipSets) {
+    const B = chip[c.id] || {};
+    for (const v in B) if (c.obj[v]) { c.obj[v] = false; offed.push(B[v]); }
+  }
+  // If that left the label with nowhere to go, put it on the floor (when the floor can have one)
+  const FB = chip.faceChips || {};
+  if (offed.length && state.labelMode !== 'none' && !Object.values(state.faces).some(Boolean) && !FB.floor) state.faces.floor = true;
+  // Show it: disabled buttons, the reasons underneath
+  const paint = (btns, B, note) => {
+    const why = [];
+    btns.forEach(b => {
+      const r = B[b.dataset.val];
+      b.disabled = !!r; b.classList.toggle('blocked', !!r); b.title = r || '';
+      if (r && !why.includes(r)) why.push(r);
+    });
+    note.textContent = why.map(w => '⊘ ' + w).join(' ');
+    note.style.display = why.length ? '' : 'none';
+  };
+  for (const key in segs) paint(segs[key].btns, seg[key] || {}, segs[key].note);
+  for (const c of chipSets) {
+    c.el.querySelectorAll('button').forEach(b => b.classList.toggle('active', !!c.obj[b.dataset.val]));
+    paint([...c.el.querySelectorAll('button')], chip[c.id] || {}, c.note);
+  }
+  return offed;
+}
+
 function update() {
   syncDerived();
+  const offed = applyBlocks();
+  if (offed.length) { syncDerived(); toast('Turned off: ' + offed[0], 4000); }
   scheduleSave();   // remember these settings (browser + link)
   // --- show/hide the controls that only apply to some choices ---
   document.getElementById('modeHint').textContent = state.mode === 'inner'
@@ -3004,12 +3445,15 @@ function update() {
       <li><b>Bottom shell layers: ${botLayers}</b>${botLabel ? ` so the ${fmt(state.textDepth)} mm label cut into the bottom has solid plastic over it` : ''}. Top shell layers 0.</li>
     </ul>Inside size, filament and time all assume 0.95 mm lines and ${botLayers} bottom layers.`;
   }
+  show('exactBox', !isGrid(state));
+  show('gridBox', isGrid(state));
   show('nestFields', state.stack === 'nest');
   show('lipFields', state.stack === 'lip');
   document.getElementById('stackHint').textContent = {
     none: 'Plain box with straight walls.',
     nest: 'Bottom is narrower so empty boxes nest like cups. Sizes are measured at the top. Corners stay round all the way down.',
-    lip: 'A stepped-in foot drops into the box below, so full boxes stack like bricks.'
+    lip: 'A stepped-in foot drops into the box below, so full boxes stack like bricks.',
+    gflip: 'Standard Gridfinity stacking lip on top: other Gridfinity boxes sit on it with their feet. It adds 4.15 mm above the box\'s unit height.'
   }[state.stack];
   show('edgeBox', Object.values(state.edges).some(Boolean));
   show('divBox', state.divOn && !state.vase);
@@ -3037,12 +3481,12 @@ function update() {
     (lidOn ? (stackLid ? ' Stackable lid labels are cut in so a box still sits flat on it.'
                        : ' Lid top is cut in (it prints face-down); lid underside is raised.') : '');
   show('lidBox', lidOn);
-  show('lidStyleWrap', !mag);
+  show('lidStyleWrap', !mag || isGrid(state));   // magnet lids are flat, except the Gridfinity stackable one
   const twist = state.lidFit === 'twist';
-  show(sliders.plugDepth.wrap, !twist);   // twist plug depth is set by the slot layout
+  show(sliders.plugDepth.wrap, !twist && !(isGrid(state) && state.stack === 'gflip'));   // twist plug depth is set by the slot layout; the Gridfinity lip sets its own
   show(sliders.lidClear.wrap, true);
-  show(sliders.plugWall.wrap, mag || state.lidStyle === 'flat' || twist);
-  show(sliders.rimDepth.wrap, !mag && state.lidStyle === 'stack');
+  show(sliders.plugWall.wrap, state.lidStyle === 'flat' || (mag && !isGrid(state)) || twist);   // stackable lids have a solid plug
+  show(sliders.rimDepth.wrap, !mag && state.lidStyle === 'stack' && !isGrid(state));   // Gridfinity lids get pockets, not a tray
   show('snapBox', state.lidFit === 'snap');
   show(sliders.bumpLen.wrap, state.snapStyle === 'sides');
   show('magBox', mag);
@@ -3059,7 +3503,7 @@ function update() {
   show('notchFields', state.notch);
   document.getElementById('lidHint').textContent = state.vase ? 'Lids are off in vase mode.' : {
     none: 'No lid.',
-    friction: 'A plug pushes into the box and holds by a snug fit. Less clearance = tighter.',
+    friction: isGrid(state) && state.stack === 'gflip' ? 'The lid drops into the Gridfinity lip: its plug has the same shape as a box\'s feet, so it can\'t slide around, and it lifts straight off. Fit clearance is the gap around the plug.' : 'A plug pushes into the box and holds by a snug fit. Less clearance = tighter.',
     snap: 'A bump on the plug clicks into a groove inside the box.',
     twist: 'Twist to lock, like a jar. Works best on square-ish boxes; the opening becomes round.',
     magnet: 'A loose plug keeps the lid from sliding around and magnets hold it down. The magnets sit in short corner posts that chamfer into the wall, so the space under them stays open.'
@@ -3067,6 +3511,7 @@ function update() {
   document.getElementById('lidStyleHint').textContent = state.lidStyle === 'flat'
     ? 'Flat lid prints plate-side down.'
     : twist ? 'Stackable lid has a tray on top for the next box. It prints upside down (tray rim on the bed), so it stays compact.'
+            : isGrid(state) ? 'Gridfinity stackable lid: baseplate pockets on top, one per grid cell, so any Gridfinity box sits on it. Prints right side up.'
             : 'Stackable lid has a tray on top for the next box and prints right side up.';
   document.getElementById('snapHint').textContent = state.snapStyle === 'sides'
     ? 'Short bumps in the middle of each side, where the plug flexes most. Easiest on and off.'
@@ -3074,7 +3519,7 @@ function update() {
 
   // section badges so you can see what's on without opening each section
   badge('bdgWalls', [state.vase ? 'Vase' : '', Object.values(state.edges).some(Boolean) ? 'Edges' : ''].filter(Boolean).join(', '));
-  badge('bdgStack', { none: '', nest: 'Nest', lip: 'Lip' }[state.stack]);
+  badge('bdgStack', { none: '', nest: 'Nest', lip: 'Lip', gflip: 'Gridfinity lip' }[state.stack]);
   badge('bdgDiv', state.divOn && !state.vase ? `${state.divXs.length + 1} × ${state.divYs.length + 1}` : '');
   badge('bdgDrain', state.drain && !state.vase ? (state.drainMode === 'one' ? '1 hole' : `${Math.round(state.drainCols) * Math.round(state.drainRows)} holes`) : '');
   badge('bdgLabel', state.emboss ? (state.labelMode === 'custom' ? 'Custom text' : 'Size') : '');
@@ -3132,7 +3577,11 @@ function update() {
   let allVol = vol;   // running total of every part that "Export all" saves
   const rows = [
     // With a lid, the outside is the closed box + lid (what you'd fit on a shelf)
-    (() => { const a = lidOutside(g); return ['Outside (OD)', `${fmt((g.hw + a.grow) * 2)} × ${fmt((g.hd + a.grow) * 2)} × ${fmt(g.Ho + a.up)}${g.lid ? ' with lid' : ''}`]; })(),
+    (() => {
+      const a = lidOutside(g), zb = g.gf ? g.gf.zBase : 0, lip = g.gf && g.gf.lip && !g.lid ? GF.lipH : 0;   // (with a lid, the lip is already in the lid's height)
+      const size = `${fmt((g.hw + a.grow) * 2)} × ${fmt((g.hd + a.grow) * 2)} × ${fmt(zb + g.Ho + a.up + lip)}${g.lid ? ' with lid' : ''}`;
+      return g.gf ? ['Gridfinity', `${g.gf.gx} × ${g.gf.gy} × ${g.gf.gz}u (${size})`] : ['Outside (OD)', size];
+    })(),
     g.vase ? ['Inside (ID)', `${fmt(g.hw * 2 - 2 * VASE_LINE)} × ${fmt(g.hd * 2 - 2 * VASE_LINE)} × ${fmt(g.Ho - vaseBottomLayers(state) * 0.2)} (vase)`] : ['Inside (ID)', `${fmt(g.hw * 2 - 2 * g.t)} × ${fmt(g.hd * 2 - 2 * g.t)} × ${fmt(g.Ho - g.f - (g.lid ? lidDrop(state) : 0))}${g.lid && lidDrop(state) > 0 ? ' under lid' : ''}`],
     ['total', 'Filament (all parts)', ''],   // filled in below once every part is measured
     ['total', 'Print time (all parts)', ''],
@@ -3166,15 +3615,15 @@ function update() {
   // Vase mode: estimate from one wide wall + bottom layers instead of the solid block
   const vaseBot = vaseBottomLayers(state) * 0.2;
   const vaseV = g.vase ? vaseExtruded(boxTrisAll, vaseBot) : 0;
-  rows.push(['Box', g.vase ? `≈ ${fmt(vaseGrams(vaseV))} g · ${fmtTime(vaseSeconds(vaseV))}` : partEst(vol)]);
+  rows.push(['Box', g.vase ? `≈ ${fmt(vaseGrams(vaseV))} g · ${fmtTime(vaseSeconds(vaseV))}` : { est: boxTrisAll }]);
   if (g.lid) {
     const L = g.lid, lv = meshVolume(lidTrisAll) / 1000;
     const grow = L.style === 'stack' ? L.to : 0;
     const lidH = L.style === 'stack' ? L.zTop : L.lt + L.P;
     rows.push(['sep']);
     rows.push(['Lid size', `${fmt((g.hw + grow) * 2)} × ${fmt((g.hd + grow) * 2)} × ${fmt(lidH)}`]);
-    rows.push(['Closed height', `${fmt(L.style === 'stack' ? L.seat + L.zTop : g.Ho + L.lt)} mm`]);
-    if (L.style === 'stack') rows.push(['Each box + lid adds', `${fmt(L.seat + L.zc)} mm`]);
+    rows.push(['Closed height', `${fmt((g.gf ? g.gf.zBase : 0) + g.Ho + lidOutside(g).up)} mm`]);   // (Gridfinity: from the bottom of the feet)
+    if (L.style === 'stack') rows.push(['Each box + lid adds', `${fmt((g.gf ? g.gf.zBase : 0) + L.seat + L.zc)} mm`]);
     if (L.tabRaised) rows.push(['Tray raised for the pull tab', `${fmt(L.zTop)} mm tall`]);
     if (L.b) rows.push(['Snap grip (bump minus gap)', `${fmt(Math.max(0, L.b - L.c))} mm`]);
     if (L.tw) {
@@ -3192,28 +3641,27 @@ function update() {
     }
     if (L.fit === 'magnet') {
       rows.push(['Magnet holes', `Ø${fmt(L.rh * 2)} × ${fmt(L.md)} deep`]);
-      rows.push(['Test piece holes', [-0.1, 0, 0.1].map(k => 'Ø' + fmt(state.magD + Math.max(0, state.magFit + k))).join(' / ')]);
+      rows.push(['Test piece holes', [-0.1, 0, 0.1].map(k => 'Ø' + fmt(state.magD + state.magFit + k)).join(' / ')]);
     }
-    rows.push(['Lid', partEst(lv)]);
+    rows.push(['Lid', { est: lidTrisAll }]);
     allVol += lv;
   }
   if (insTrisAll) {
     const iv = meshVolume(insTrisAll) / 1000;
-    rows.push(['Tray insert', partEst(iv)]);
+    rows.push(['Tray insert', { est: insTrisAll }]);
     allVol += iv;
   }
   // Totals go in the top rows so they show even when the list is collapsed
-  rows[2][2] = `≈ ${Math.round(g.vase ? vaseGrams(vaseV) : estGrams(allVol))} g PLA`;
-  rows[3][2] = `≈ ${fmtTime((g.vase ? vaseSeconds(vaseV) : estSeconds(allVol)) + PREP_S)}`;
+  if (g.vase) {
+    rows[2][2] = `≈ ${Math.round(vaseGrams(vaseV))} g PLA`;
+    rows[3][2] = `≈ ${fmtTime(vaseSeconds(vaseV) + PREP_S)}`;
+  } else { rows[2][2] = '…'; rows[3][2] = '…'; }   // filled in a moment later by the rough slice (see showEstimates)
   rows.push(['sep']);
   rows.push(['Estimate based on', g.vase ? `Bambu 0.20 mm, spiral vase, 0.95 mm lines, ${Math.round(vaseBot / 0.2)} bottom layers` : 'Bambu 0.20 mm Standard, PLA']);
   rows.push(['Plate prep (heat, level)', `≈ ${fmtTime(PREP_S)}`]);
   rows.push(['Triangles', (boxTrisAll.length + (lidTrisAll ? lidTrisAll.length : 0)).toLocaleString()]);
-  document.getElementById('info').innerHTML = rows.map(r => {
-    if (r[0] === 'sep') return '<div class="sep"></div>';
-    if (r[0] === 'total') return `<div class="total"><span>${r[1]}</span><span>${r[2]}</span></div>`;
-    return `<div><span>${r[0]}</span><span>${r[1]}</span></div>`;
-  }).join('');
+  renderInfo(rows);
+  if (!g.vase) showEstimates(rows);
   refreshExportMenu();
   document.getElementById('magFileName').textContent = `magnet-test_${fmt(state.magD)}x${fmt(state.magT)}.stl`;
 
