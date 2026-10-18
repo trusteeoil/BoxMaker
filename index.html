@@ -272,6 +272,7 @@
         <div class="tipBox" id="vaseTips"></div>
         <div class="sublabel">Round or bevel edges</div>
         <div class="chips" id="edgeChips"></div>
+        <p class="hint" id="autoChamferHint"></p>
         <div id="edgeBox">
           <div class="seg" id="edgeStyleSeg" style="margin-top:8px"></div>
           <div id="edgeFields"></div>
@@ -333,6 +334,11 @@
           <div class="sublabel">Where</div>
           <div class="chips" id="faceChips"></div>
           <p class="hint" id="faceHint"></p>
+          <div id="floorLabelBox">
+            <div class="sublabel">Floor label</div>
+            <div class="seg" id="floorLabelSeg"></div>
+            <p class="hint">Cut in: the letters go 0.4 mm (2 layers) down into the floor, so nothing sticks up. That keeps the layers right above the floor from turning into lots of tiny islands, one less thing that can leave a line on the outside walls.</p>
+          </div>
           <div class="sublabel">Font</div>
           <div class="seg" id="fontSeg"></div>
           <div id="embossFields"></div>
@@ -421,7 +427,7 @@
       </div>
       <div class="fileName" id="exportSummary"></div>
       <!-- Version lives here, small and out of the way -->
-      <div id="version">v2026.10.18.05</div>
+      <div id="version">v2026.10.18.07</div>
     </div>
   </div>
 
@@ -500,6 +506,7 @@ const state = {
   labelFont: 'bold', // 'bold' | 'narrow' | 'plain'
   textH: 6,          // letter height (shrinks automatically if it doesn't fit)
   textDepth: 0.6,    // how far letters stick out (or cut in on the bottom)
+  floorLabel: 'cut', // inside floor label: 'cut' (cut into the floor, nothing sticks up) | 'raised'
 
   // Lid
   lidMode: 'none',     // 'none' | 'friction' | 'snap' | 'magnet'
@@ -851,6 +858,8 @@ const GF = {
   magR: 3.25, magDepth: 2.4, magOff: 13   // standard 6 x 2 mm magnet holes, 4 per foot
 };
 const isGrid = p => p.sizeMode === 'grid';
+const GF_AUTO_CHAMFER = 1.2;
+const FLOOR_CUT = 0.4;         // mm, how deep a cut-in floor label goes   // mm, inside floor chamfer added for Gridfinity boxes with a lid
 
 function computeGeometry(p) {
   if (isGrid(p)) {
@@ -939,6 +948,10 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
   if (p.emboss && wantHoles && (p.faces.bottom || p.faces.floor)) warns.push('Bottom/floor label is off while drain holes are on. Pick a wall for the label.');
   if (p.emboss && vase && p.faces.floor) warns.push('Floor label is off in vase mode.');
   if (g.e && g.e > f - 0.6) errs.push(`Floor must be at least ${fmt(g.e + 0.6)} mm thick to cut the label into the bottom.`);
+  // Floor label cut into the inside floor: the floor drops by the letter depth and a slab with
+  // letter-shaped holes fills it back up. Needs solid floor under the letters (and under a bottom label).
+  g.fCut = g.labelFloor && p.floorLabel !== 'raised' ? FLOOR_CUT : 0;   // always 0.4 mm: 2 layers at 0.2, shallow but clear
+  if (g.fCut && g.fCut + g.e > f - 0.6) errs.push(`Floor must be at least ${fmt(g.fCut + g.e + 0.6)} mm thick to cut the label into the floor. Make the floor thicker, the letters shallower, or set the floor label to Raised.`);
   if (p.emboss && anyWall && p.stack === 'nest') warns.push('Raised text on the outside walls will stop boxes nesting all the way. Floor or Bottom labels are safe.');
   if (p.emboss && !Object.values(p.faces).some(Boolean)) warns.push('Pick at least one spot for the label.');
 
@@ -954,6 +967,14 @@ function computeGeometryCore(p, adj = { up: 0, grow: 0 }) {
   if (p.edges.bottom && p.edgeStyle === 'fillet' && sb > 1.2) warns.push('A big rounded bottom edge droops when printed. A chamfer prints cleaner on the bottom.');
   const mk = s => s > 0.05 ? { s, style: p.edgeStyle } : null;
   g.edges = { bot: mk(sb), topO: mk(so), topI: mk(si), scoop: mk(sc) };
+  // Gridfinity box with a lid: a small 45° chamfer where the inside floor meets the walls,
+  // on by default. The box floor and the lid's flat top finish within a few layers of each
+  // other when they print together; the chamfer eases the walls through that spot instead
+  // of the floor stopping dead against them, which helps keep a line off the outside.
+  if (!g.edges.scoop && isGrid(p) && p.lid && !vase) {
+    const a = Math.min(GF_AUTO_CHAMFER, (Math.min(hw, hd) + minInset - t) * 0.4, (Ho - f) * 0.5);
+    if (a > 0.05) { g.edges.scoop = { s: a, style: 'chamfer' }; g.autoChamfer = a; }
+  }
 
   // --- lid ---
   g.groove = () => 0; g.grooveZ = []; g.lid = null; g.notch = null;
@@ -1291,7 +1312,9 @@ function buildBox(g, p, raster) {
       const drop = ringAtInset(g, 0, g.I(g.f));
       list = [...outerRings, ...innerRings, drop, outerRings[0]];
     } else {
-      list = [{ c: [0, 0, g.e] }, ...outerRings, ...innerRings, { c: [0, 0, g.f] }];
+      list = [{ c: [0, 0, g.e] }, ...outerRings, ...innerRings];
+      if (g.fCut) list.push(ringAtInset(g, g.f - g.fCut, g.I(g.f)));   // floor drops for a cut-in label (the slab in buildLabels fills it back)
+      list.push({ c: [0, 0, g.f - g.fCut] });
     }
   }
   if (g.notch) applyNotch(g, list);
@@ -1572,11 +1595,18 @@ function buildLabels(g, p, raster, shells, labels) {
   if (g.labelFloor) {
     const oF = g.I(g.f), hwF = g.hw + oF, hdF = g.hd + oF;
     const m = 1.5 + Math.max(0, g.R(oF - g.o(g.f), g.o(g.f))) * 0.3;
-    const ras = raster(2 * (hwF - m), 2 * (hdF - m), 0);
-    if (ras) {
-      labels.push(['Floor', ras.hMm]);
-      addRects(bitmapRects(ras, 1), (sh, u0, v0, u1, v1) => boxTris(sh, u0, u1, v0, v1, g.f - EMB, g.f + d));
-    } else labels.push(['Floor', 0]);
+    if (g.fCut) {
+      // Cut in: a slab the shape of the floor, with the letters left out, fills the floor back up
+      const tuck = Math.min(0.3, g.t / 2), o = g.o(g.f);
+      const poly = roundedRing(hwF + tuck, hdF + tuck, g.R(oF - o + tuck, o), 0).map(q => [q[0], q[1]]);
+      labels.push(['Floor', engraveFace(shells, raster, poly, hwF, hdF, g.R(oF - o, o), g.f - g.fCut - 0.05, g.f, mapPlain, [hwF - m, hdF - m])]);
+    } else {
+      const ras = raster(2 * (hwF - m), 2 * (hdF - m), 0);
+      if (ras) {
+        labels.push(['Floor', ras.hMm]);
+        addRects(bitmapRects(ras, 1), (sh, u0, v0, u1, v1) => boxTris(sh, u0, u1, v0, v1, g.f - EMB, g.f + d));
+      } else labels.push(['Floor', 0]);
+    }
   }
 
   // Bottom: letters cut in, mirrored so they read right when you flip the box over.
@@ -2906,6 +2936,7 @@ addSegmented('labelModeSeg', 'labelMode', [['none', 'None'], ['size', 'Size'], [
 addChips('faceChips', state.faces, [['bottom', 'Bottom'], ['floor', 'Floor'], ['front', 'Front'], ['back', 'Back'],
   ['left', 'Left'], ['right', 'Right'], ['lidTop', 'Lid top'], ['lidUnder', 'Lid underside']]);
 addSegmented('fontSeg', 'labelFont', [['bold', 'Bold'], ['narrow', 'Narrow'], ['plain', 'Plain']]);
+addSegmented('floorLabelSeg', 'floorLabel', [['cut', 'Cut in'], ['raised', 'Raised']]);
 addSlider('embossFields', 'textH', 'Letter height', 2, 20, 0.5);
 addSlider('embossFields', 'textDepth', 'Letter depth', 0.2, 2, 0.1);
 document.getElementById('labelText').addEventListener('input', e => { state.labelText = e.target.value; update(); });
@@ -2963,7 +2994,7 @@ const SECTIONS = {
   stack: ['stack', 'taper', 'foot', 'clear'],
   div:   ['divMode', 'divCols', 'divRows', 'divXs', 'divYs', 'divOff', 'divThick', 'divDrop'],
   drain: ['drainSel', 'drainMode', 'drainD', 'drainCols', 'drainRows'],
-  label: ['labelMode', 'faces', 'labelText', 'labelLine2', 'labelFont', 'textH', 'textDepth'],
+  label: ['labelMode', 'faces', 'floorLabel', 'labelText', 'labelLine2', 'labelFont', 'textH', 'textDepth'],
   lid:   ['lidMode', 'lidFit', 'lidStyle', 'lidThick', 'plugDepth', 'plugWall', 'lidClear', 'snapBump', 'snapStyle',
           'bumpLen', 'rimDepth', 'magD', 'magT', 'magFit', 'twistLock', 'trayInsert', 'insertT', 'insertClear', 'tabPos', 'tabW', 'tabL',
           'notchSide', 'notchW', 'notchD', 'lidView'],
@@ -3528,13 +3559,18 @@ function update() {
   show('drainHint', state.drainMode === 'grid');
   show('embossBox', state.emboss);
   show('customTextField', state.labelMode === 'custom');
+  show('floorLabelBox', state.emboss && state.faces.floor);
+  const autoCh = isGrid(state) && state.lid && !state.vase && !state.edges.scoop;
+  show('autoChamferHint', autoCh);
+  document.getElementById('autoChamferHint').textContent = autoCh
+    ? `Gridfinity box with a lid: a ${fmt(GF_AUTO_CHAMFER)} mm 45° chamfer is added inside the floor automatically (it helps keep a line off the outside walls). Turn on Inside floor (scoop) to set your own.` : '';
   document.getElementById('labelText').placeholder = autoLabel();
   const lidOn = state.lid && !state.vase, mag = state.lidFit === 'magnet';
   // Lid label spots only make sense when there's a lid
   document.querySelectorAll('#faceChips button[data-val^="lid"]').forEach(b => show(b, lidOn));
   const stackLid = lidOn && !mag && state.lidStyle === 'stack' && state.lidFit !== 'twist';   // twist stack lid labels work like a flat lid
   document.getElementById('faceHint').textContent =
-    'Bottom is cut in so the box sits flat (reads right when flipped over). Floor and walls are raised.' +
+    `Bottom is cut in so the box sits flat (reads right when flipped over). Floor is ${state.floorLabel === 'raised' ? 'raised' : 'cut in'}, walls are raised.` +
     (lidOn ? (stackLid ? ' Stackable lid labels are cut in so a box still sits flat on it.'
                        : ' Lid top is cut in (it prints face-down); lid underside is raised.') : '');
   show('lidBox', lidOn);
